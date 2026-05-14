@@ -1,0 +1,7 @@
+anthropic
+flask
+flask-cors
+python-dotenv
+duckduckgo-search
+ddgs
+gunicorn
