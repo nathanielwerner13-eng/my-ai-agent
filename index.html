@@ -6,86 +6,72 @@
     <title>Bina</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
+        html, body {
+            height: 100%;
             background-color: #000;
             color: #fff;
             font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-            height: 100vh;
+        }
+        body {
             display: flex;
             flex-direction: column;
-            align-items: center;
+            height: 100vh;
         }
-
         header {
-            width: 100%;
-            padding: 40px 0 10px 0;
+            padding: 30px 0 15px 0;
             text-align: center;
             border-bottom: 1px solid #1a1a1a;
+            flex-shrink: 0;
         }
-
         .hebrew-accent {
             font-size: 11px;
             color: #444;
             letter-spacing: 6px;
             margin-bottom: 10px;
         }
-
         .logo {
-            font-size: 32px;
+            font-size: 28px;
             font-weight: 300;
             letter-spacing: 8px;
             color: #fff;
         }
-
-        .star {
-            font-size: 12px;
-            color: #555;
-            margin: 0 8px;
-        }
-
+        .star { font-size: 12px; color: #555; margin: 0 8px; }
         .tagline {
-            font-size: 11px;
+            font-size: 10px;
             color: #444;
             letter-spacing: 4px;
             margin-top: 8px;
             text-transform: uppercase;
         }
-
         #chat {
             flex: 1;
-            width: 100%;
-            max-width: 680px;
             overflow-y: auto;
-            padding: 30px 20px;
+            padding: 24px 20px;
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 14px;
+            max-width: 700px;
+            width: 100%;
+            margin: 0 auto;
         }
-
         .msg {
-            max-width: 75%;
+            max-width: 78%;
             padding: 12px 16px;
-            border-radius: 2px;
             font-size: 14px;
             line-height: 1.6;
-            letter-spacing: 0.3px;
         }
-
         .msg.user {
             background: #111;
             border: 1px solid #222;
             align-self: flex-end;
             color: #eee;
         }
-
         .msg.agent {
             background: #0a0a0a;
-            border-left: 1px solid #333;
+            border-left: 1px solid #2a2a2a;
             align-self: flex-start;
-            color: #ccc;
+            color: #bbb;
         }
-
         .msg.agent::before {
             content: "בינה";
             display: block;
@@ -94,16 +80,16 @@
             letter-spacing: 3px;
             margin-bottom: 6px;
         }
-
         #bottom {
-            width: 100%;
-            max-width: 680px;
-            padding: 16px 20px 32px 20px;
+            flex-shrink: 0;
+            padding: 14px 20px 24px 20px;
+            border-top: 1px solid #111;
             display: flex;
             gap: 10px;
-            border-top: 1px solid #111;
+            max-width: 700px;
+            width: 100%;
+            margin: 0 auto;
         }
-
         #input {
             flex: 1;
             background: #0d0d0d;
@@ -112,38 +98,70 @@
             padding: 12px 16px;
             font-size: 14px;
             outline: none;
-            border-radius: 2px;
             font-family: inherit;
-            letter-spacing: 0.3px;
         }
-
         #input::placeholder { color: #333; }
-        #input:focus { border-color: #333; }
-
         #send {
             background: #fff;
             color: #000;
             border: none;
-            padding: 12px 24px;
-            font-size: 13px;
+            padding: 12px 22px;
+            font-size: 12px;
             letter-spacing: 2px;
             text-transform: uppercase;
             cursor: pointer;
-            border-radius: 2px;
             font-family: inherit;
         }
-
-        #send:hover { background: #e0e0e0; }
-
+        #send:hover { background: #ddd; }
         .footer-hebrew {
+            text-align: center;
             font-size: 10px;
             color: #1a1a1a;
             letter-spacing: 4px;
-            padding: 8px 0;
+            padding: 6px 0;
+            flex-shrink: 0;
         }
     </style>
 </head>
 <body>
     <header>
         <div class="hebrew-accent">מערכת בינה מלאכותית</div>
-        <div class="logo"><span class="star">✡</span>BINA<span class="star">✡
+        <div class="logo"><span class="star">✡</span>BINA<span class="star">✡</span></div>
+        <div class="tagline">Always Working. Never Sleeping.</div>
+    </header>
+
+    <div id="chat">
+        <div class="msg agent">Shalom. I am Bina, your personal AI agent. How may I assist you today?</div>
+    </div>
+
+    <div id="bottom">
+        <input id="input" type="text" placeholder="Message Bina..." />
+        <button id="send" onclick="send()">Send</button>
+    </div>
+
+    <div class="footer-hebrew">ב • י • נ • ה</div>
+
+    <script>
+        document.getElementById("input").addEventListener("keypress", function(e) {
+            if (e.key === "Enter") send();
+        });
+        async function send() {
+            var msg = document.getElementById("input").value;
+            if (!msg) return;
+            var chat = document.getElementById("chat");
+            chat.innerHTML += "<div class='msg user'>" + msg + "</div>";
+            document.getElementById("input").value = "";
+            chat.innerHTML += "<div class='msg agent' id='typing'>...</div>";
+            chat.scrollTop = chat.scrollHeight;
+            try {
+                var r = await fetch("/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: msg})});
+                var d = await r.json();
+                document.getElementById("typing").outerHTML = "<div class='msg agent'>" + d.response + "</div>";
+            } catch(e) {
+                document.getElementById("typing").outerHTML = "<div class='msg agent'>Connection error.</div>";
+            }
+            chat.scrollTop = chat.scrollHeight;
+        }
+    </script>
+</body>
+</html>
