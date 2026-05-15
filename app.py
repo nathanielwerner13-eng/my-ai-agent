@@ -4,7 +4,7 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 from ddgs import DDGS
 from twilio.rest import Client as TwilioClient
-from twilio.twig.messaging_response import MessagingResponse
+from twilio.twiml.messaging_response import MessagingResponse
 import os
 import json
 
