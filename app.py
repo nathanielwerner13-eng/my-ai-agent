@@ -156,7 +156,7 @@ def chat():
     messages = conversation_history + [{"role": "user", "content": user_message_with_context}]
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5",
         max_tokens=2048,
         system=SYSTEM_PROMPT + memory_context,
         messages=messages
