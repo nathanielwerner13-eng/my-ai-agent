@@ -2,7 +2,6 @@ flask
 flask-cors
 anthropic
 python-dotenv
-duckduckgo-search
-twilio
+duckduckgo_search
 resend
 gunicorn
