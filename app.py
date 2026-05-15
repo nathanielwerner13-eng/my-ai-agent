@@ -443,7 +443,13 @@ def chat():
     if memories:
         memory_context = "\n\nRelevant memories:\n" + "\n".join(memories[-10:])
 
-    messages = conversation_history + [{"role": "user", "content": user_message_with_context}]
+    current_time = time.strftime('%A, %B %d, %Y %I:%M %p', time.gmtime())
+la_offset = -7
+import datetime
+la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=la_offset)
+la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
+user_message_with_context = f"[Current date and time in Los Angeles: {la_time_str}]\n\n" + user_message_with_context
+messages = conversation_history + [{"role": "user", "content": user_message_with_context}]
 
     response = client.messages.create(
         model="claude-sonnet-4-5",
