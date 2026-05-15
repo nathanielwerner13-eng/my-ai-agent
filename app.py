@@ -9,16 +9,12 @@ from flask import Flask, request, jsonify, session, redirect
 from flask_cors import CORS
 from anthropic import Anthropic
 from duckduckgo_search import DDGS
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.secret_key = os.environ.get('SECRET_KEY', 'bina-secret-key-2024')
 CORS(app)
 
 client = Anthropic()
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 PASSPHRASE = 'bina2024'
 MEMORY_FILE = 'memory.json'
@@ -40,7 +36,7 @@ You can:
 Always be concise unless depth is needed. Think like a brilliant chief of staff who is always one step ahead."""
 
 
-# ── Memory ──────────────────────────────────────────────────────────────────
+# ── Memory ───────────────────────────────────────────────────────────────────
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
@@ -53,7 +49,7 @@ def save_memory(memories):
         json.dump(memories, f)
 
 
-# ── Web Search ───────────────────────────────────────────────────────────────
+# ── Web Search ────────────────────────────────────────────────────────────────
 
 def web_search(query):
     try:
@@ -69,31 +65,40 @@ def web_search(query):
         return f"Search error: {str(e)}"
 
 
-# ── Gmail ────────────────────────────────────────────────────────────────────
+# ── Gmail (pure HTTP, no google-auth library) ─────────────────────────────────
 
-def get_gmail_service():
-    creds = Credentials(
-        token=None,
-        refresh_token=os.environ.get('GOOGLE_REFRESH_TOKEN'),
-        token_uri='https://oauth2.googleapis.com/token',
-        client_id=os.environ.get('GOOGLE_CLIENT_ID'),
-        client_secret=os.environ.get('GOOGLE_CLIENT_SECRET'),
-        scopes=GMAIL_SCOPES.split()
-    )
-    if not creds.valid:
-        creds.refresh(Request())
-    return build('gmail', 'v1', credentials=creds)
+def get_access_token():
+    response = requests.post('https://oauth2.googleapis.com/token', data={
+        'refresh_token': os.environ.get('GOOGLE_REFRESH_TOKEN'),
+        'client_id': os.environ.get('GOOGLE_CLIENT_ID'),
+        'client_secret': os.environ.get('GOOGLE_CLIENT_SECRET'),
+        'grant_type': 'refresh_token'
+    })
+    data = response.json()
+    if 'error' in data:
+        raise Exception(f"Token refresh failed: {data}")
+    return data['access_token']
 
 def send_email(to, subject, body):
     try:
-        service = get_gmail_service()
+        access_token = get_access_token()
         message = MIMEText(body)
         message['to'] = to
         message['subject'] = subject
         message['from'] = os.environ.get('GMAIL_ADDRESS')
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        service.users().messages().send(userId='me', body={'raw': raw}).execute()
-        return True, None
+        response = requests.post(
+            'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
+            headers={
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            },
+            json={'raw': raw}
+        )
+        if response.status_code == 200:
+            return True, None
+        else:
+            return False, str(response.json())
     except Exception as e:
         return False, str(e)
 
@@ -111,7 +116,7 @@ def clean_response(text):
     return cleaned.strip()
 
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route('/')
 def index():
@@ -138,9 +143,9 @@ def test_email():
         'Hey! This is Bina testing email directly.'
     )
     if success:
-        return f'<h2 style="color:green;font-family:monospace">✅ Email sent successfully!</h2><p style="font-family:monospace">Token used: {token[:20]}...</p>'
+        return f'<h2 style="color:green;font-family:monospace">✅ Email sent!</h2><p style="font-family:monospace">Token: {token[:30]}...</p>'
     else:
-        return f'<h2 style="color:red;font-family:monospace">❌ Failed: {error}</h2><p style="font-family:monospace">Token used: {token[:20]}...</p>'
+        return f'<h2 style="color:red;font-family:monospace">❌ Failed: {error}</h2><p style="font-family:monospace">Token: {token[:30]}...</p>'
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -230,20 +235,20 @@ def oauth_callback():
     refresh_token = tokens.get('refresh_token', '')
 
     if not refresh_token:
-        note = "⚠️ No refresh token returned. Go to https://myaccount.google.com/permissions, revoke access for this app, then try /authorize again."
+        note = "⚠️ No refresh token. Go to https://myaccount.google.com/permissions, revoke access, then try /authorize again."
     else:
-        note = "✅ Copy the token above and set it as GOOGLE_REFRESH_TOKEN in Railway variables."
+        note = "✅ Copy the token above and set it as GOOGLE_REFRESH_TOKEN in Railway."
 
     return f"""
     <html>
-    <body style="font-family: monospace; padding: 40px; background: #000; color: #0f0;">
+    <body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
     <h2>OAuth Callback</h2>
     <p><b>Refresh Token:</b></p>
     <textarea style="width:100%;height:80px;background:#111;color:#0f0;font-size:13px;padding:8px;">{refresh_token}</textarea>
     <br><br>
     <p>{note}</p>
     <br>
-    <p><b>Full response (for debugging):</b></p>
+    <p><b>Full response:</b></p>
     <pre style="background:#111;padding:10px;color:#ff0;">{json.dumps(tokens, indent=2)}</pre>
     </body>
     </html>
