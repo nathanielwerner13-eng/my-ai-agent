@@ -28,11 +28,7 @@ You have access to web search. When asked about current events, news, prices,
 or anything requiring up-to-date information, use the search results provided.
 You have a warm, professional personality like a trusted personal assistant.
 Your name Bina (בינה) means intelligence and wisdom in Hebrew.
-
-You can send emails on behalf of Nathaniel Werner. When asked to send an email,
-always confirm the recipient, subject, and body before sending. Write professional,
-personalized emails appropriate for the context (internship inquiries, business
-proposals, networking, etc.)."""
+You can send emails on behalf of Nathaniel Werner using the send email command."""
 
 def search_web(query):
     try:
@@ -51,13 +47,11 @@ def send_email(to_email, subject, body):
     try:
         gmail_address = os.getenv("GMAIL_ADDRESS")
         gmail_password = os.getenv("GMAIL_APP_PASSWORD")
-        
         msg = MIMEMultipart()
         msg['From'] = gmail_address
         msg['To'] = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
-        
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(gmail_address, gmail_password)
@@ -87,16 +81,13 @@ def chat():
     global conversation_history
     data = request.json
     user_message = data.get('message', '')
-
     search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
     should_search = any(k in user_message.lower() for k in search_keywords)
-
     enhanced_message = user_message
     if should_search:
         search_results = search_web(user_message)
         if search_results:
             enhanced_message = user_message + "\n\n[SEARCH RESULTS]\n" + search_results
-
     conversation_history.append({"role": "user", "content": enhanced_message})
     response = client.messages.create(
         model="claude-haiku-4-5",
@@ -114,16 +105,7 @@ def whatsapp():
     global whatsapp_history
     incoming_msg = request.values.get('Body', '').strip()
 
-    search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
-    should_search = any(k in incoming_msg.lower() for k in search_keywords)
-
-    enhanced_message = incoming_msg
-    if should_search:
-        search_results = search_web(incoming_msg)
-        if search_results:
-            enhanced_message = incoming_msg + "\n\n[SEARCH RESULTS]\n" + search_results
-
-    # Check if user wants to send an email
+    # EMAIL SEND COMMAND — must be checked FIRST before AI sees the message
     if incoming_msg.lower().startswith('send email'):
         parts = incoming_msg.split('|')
         if len(parts) == 4:
@@ -133,16 +115,25 @@ def whatsapp():
             success = send_email(to_email, subject, body)
             reply = f"✅ Email sent to {to_email}!" if success else "❌ Failed to send email. Please try again."
         else:
-            reply = "To send an email, use this format:\nsend email | recipient@email.com | Subject | Email body here"
-        
+            reply = "To send an email use this format:\nsend email | recipient@email.com | Subject Here | Email body here"
         resp = MessagingResponse()
         resp.message(reply)
         return str(resp)
 
-    # Check if user wants Bina to write and send an email
-    if 'draft email' in incoming_msg.lower() or 'write email' in incoming_msg.lower() or 'email to' in incoming_msg.lower():
-        enhanced_message = incoming_msg + "\n\nPlease draft a professional email for Nathaniel Werner. Format your response as:\nTO: [email if known]\nSUBJECT: [subject]\nBODY:\n[email body]\n\nThen ask for approval before sending."
+    # WEB SEARCH
+    search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
+    should_search = any(k in incoming_msg.lower() for k in search_keywords)
+    enhanced_message = incoming_msg
+    if should_search:
+        search_results = search_web(incoming_msg)
+        if search_results:
+            enhanced_message = incoming_msg + "\n\n[SEARCH RESULTS]\n" + search_results
 
+    # EMAIL DRAFT REQUEST
+    if 'draft email' in incoming_msg.lower() or 'write email' in incoming_msg.lower() or 'email to' in incoming_msg.lower():
+        enhanced_message = incoming_msg + "\n\nPlease draft a professional email for Nathaniel Werner. Format your response as:\nTO: [email]\nSUBJECT: [subject]\nBODY:\n[email body]\n\nThen tell the user to reply with:\nsend email | to@email.com | Subject | Body\nto actually send it."
+
+    # AI RESPONSE
     whatsapp_history.append({"role": "user", "content": enhanced_message})
     response = client.messages.create(
         model="claude-haiku-4-5",
@@ -152,7 +143,6 @@ def whatsapp():
     )
     reply = response.content[0].text
     whatsapp_history.append({"role": "assistant", "content": reply})
-
     resp = MessagingResponse()
     resp.message(reply)
     return str(resp)
@@ -163,10 +153,8 @@ def send_email_route():
     to_email = data.get('to', '')
     subject = data.get('subject', '')
     body = data.get('body', '')
-    
     if not to_email or not subject or not body:
         return jsonify({"status": "error", "message": "Missing required fields"})
-    
     success = send_email(to_email, subject, body)
     if success:
         return jsonify({"status": "success", "message": f"Email sent to {to_email}"})
