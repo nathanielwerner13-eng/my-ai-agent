@@ -11,338 +11,355 @@
     <link rel="manifest" href="/manifest.json">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        html, body {
-            height: 100%;
-            background: #000;
-            color: #fff;
-            font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-            overflow: hidden;
-        }
+        html, body { height: 100%; background: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; overflow: hidden; }
         body { display: flex; flex-direction: column; height: 100dvh; }
 
-        /* LOCK SCREEN */
-        #lock {
-            position: fixed; inset: 0; background: #000;
-            display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-            z-index: 100; gap: 32px;
-        }
+        #lock { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; gap: 32px; }
         #lock.hidden { display: none; }
         .lock-logo { font-size: 32px; font-weight: 300; letter-spacing: 10px; color: #fff; }
         .lock-hebrew { font-size: 11px; color: #444; letter-spacing: 6px; }
-        .lock-input {
-            background: #0d0d0d; border: 1px solid #222;
-            color: #fff; padding: 14px 20px; font-size: 16px;
-            width: 260px; text-align: center; outline: none;
-            font-family: inherit; letter-spacing: 4px;
-        }
-        .lock-btn {
-            background: #fff; color: #000; border: none;
-            padding: 14px 40px; font-size: 12px;
-            letter-spacing: 3px; text-transform: uppercase;
-            cursor: pointer; font-family: inherit; width: 260px;
-        }
+        .lock-input { background: #0d0d0d; border: 1px solid #222; color: #fff; padding: 14px 20px; font-size: 16px; width: 260px; text-align: center; outline: none; font-family: inherit; letter-spacing: 4px; }
+        .lock-btn { background: #fff; color: #000; border: none; padding: 14px 40px; font-size: 12px; letter-spacing: 3px; text-transform: uppercase; cursor: pointer; font-family: inherit; width: 260px; }
         .lock-error { color: #ff4444; font-size: 12px; letter-spacing: 2px; height: 16px; }
 
-        /* HEADER */
-        header {
-            flex-shrink: 0; padding: env(safe-area-inset-top, 44px) 0 12px;
-            text-align: center; border-bottom: 1px solid #111;
-        }
+        header { flex-shrink: 0; padding: env(safe-area-inset-top, 44px) 16px 12px; text-align: center; border-bottom: 1px solid #111; position: relative; }
         .hebrew-accent { font-size: 9px; color: #444; letter-spacing: 6px; margin-bottom: 6px; }
         .logo { font-size: 24px; font-weight: 300; letter-spacing: 8px; color: #fff; }
         .star { font-size: 10px; color: #555; margin: 0 7px; }
         .tagline { font-size: 9px; color: #444; letter-spacing: 4px; margin-top: 5px; }
 
-        /* CHAT */
-        #chat {
-            flex: 1; overflow-y: auto; padding: 16px 14px;
-            display: flex; flex-direction: column; gap: 12px;
-            -webkit-overflow-scrolling: touch;
-        }
-        .msg {
-            max-width: 82%; padding: 10px 14px;
-            font-size: 14px; line-height: 1.6;
-        }
-        .msg.user {
-            background: #111; border: 1px solid #222;
-            align-self: flex-end; color: #eee;
-            border-radius: 16px 16px 4px 16px;
-        }
-        .msg.agent {
-            background: #0a0a0a; border-left: 2px solid #222;
-            align-self: flex-start; color: #bbb;
-            border-radius: 0 16px 16px 16px;
-        }
-        .msg.agent::before {
-            content: "בינה";
-            display: block; font-size: 8px;
-            color: #444; letter-spacing: 3px; margin-bottom: 5px;
-        }
-        .msg.typing { color: #444; font-size: 20px; letter-spacing: 4px; }
+        #notif-btn { position: absolute; top: env(safe-area-inset-top, 44px); right: 16px; background: none; border: none; font-size: 20px; cursor: pointer; color: #555; padding: 8px; }
+        #notif-badge { position: absolute; top: -2px; right: -2px; background: #ff4444; color: #fff; font-size: 9px; border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; display: none; }
 
-        /* EMAIL STATUS */
-        .email-status {
-            font-size: 11px; padding: 6px 12px;
-            border-radius: 20px; align-self: flex-start;
-            margin-top: -6px;
-        }
+        #notif-panel { position: fixed; inset: 0; background: #000; z-index: 50; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.3s ease; }
+        #notif-panel.open { transform: translateX(0); }
+        .notif-header { padding: env(safe-area-inset-top, 44px) 16px 16px; border-bottom: 1px solid #111; display: flex; justify-content: space-between; align-items: center; }
+        .notif-header h2 { font-size: 16px; font-weight: 300; letter-spacing: 4px; color: #fff; }
+        .notif-close { background: none; border: none; color: #555; font-size: 24px; cursor: pointer; }
+        #notif-list { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+        .notif-item { background: #0a0a0a; border: 1px solid #1a1a1a; border-left: 2px solid #333; padding: 14px; border-radius: 8px; }
+        .notif-item.unread { border-left-color: #00cc66; }
+        .notif-from { font-size: 11px; color: #666; margin-bottom: 4px; }
+        .notif-subject { font-size: 13px; color: #ccc; margin-bottom: 8px; font-weight: 500; }
+        .notif-body { font-size: 12px; color: #555; margin-bottom: 12px; line-height: 1.5; }
+        .notif-draft { background: #0d1a0d; border: 1px solid #1a3a1a; padding: 10px; border-radius: 6px; font-size: 12px; color: #0f0; line-height: 1.5; margin-bottom: 10px; }
+        .notif-draft-label { font-size: 10px; color: #444; letter-spacing: 2px; margin-bottom: 6px; }
+        .notif-actions { display: flex; gap: 8px; }
+        .btn-send { background: #00cc66; color: #000; border: none; padding: 8px 16px; font-size: 11px; border-radius: 20px; cursor: pointer; font-family: inherit; letter-spacing: 1px; }
+        .btn-edit { background: #111; color: #666; border: 1px solid #222; padding: 8px 16px; font-size: 11px; border-radius: 20px; cursor: pointer; font-family: inherit; }
+        .btn-dismiss { background: none; color: #333; border: none; padding: 8px 16px; font-size: 11px; cursor: pointer; font-family: inherit; }
+        .notif-empty { color: #333; text-align: center; margin-top: 60px; font-size: 13px; letter-spacing: 2px; }
+
+        #chat { flex: 1; overflow-y: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 12px; -webkit-overflow-scrolling: touch; }
+        .msg { max-width: 82%; padding: 10px 14px; font-size: 14px; line-height: 1.6; }
+        .msg.user { background: #111; border: 1px solid #222; align-self: flex-end; color: #eee; border-radius: 16px 16px 4px 16px; }
+        .msg.agent { background: #0a0a0a; border-left: 2px solid #222; align-self: flex-start; color: #bbb; border-radius: 0 16px 16px 16px; }
+        .msg.agent::before { content: "בינה"; display: block; font-size: 8px; color: #444; letter-spacing: 3px; margin-bottom: 5px; }
+        .msg.typing { color: #444; font-size: 20px; letter-spacing: 4px; }
+        .email-status { font-size: 11px; padding: 6px 12px; border-radius: 20px; align-self: flex-start; margin-top: -6px; }
         .email-status.sent { color: #00cc66; background: #001a0d; border: 1px solid #004d1f; }
         .email-status.failed { color: #ff4444; background: #1a0000; border: 1px solid #4d0000; }
 
-        /* QUICK ACTIONS */
-        #quick {
-            flex-shrink: 0; padding: 8px 14px;
-            display: flex; gap: 8px; overflow-x: auto;
-            scrollbar-width: none; border-top: 1px solid #0d0d0d;
-        }
+        #quick { flex-shrink: 0; padding: 8px 14px; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; border-top: 1px solid #0d0d0d; }
         #quick::-webkit-scrollbar { display: none; }
-        .qa {
-            background: #0d0d0d; border: 1px solid #1a1a1a;
-            color: #666; font-size: 11px; padding: 7px 14px;
-            border-radius: 20px; white-space: nowrap; cursor: pointer;
-            flex-shrink: 0; font-family: inherit;
-        }
+        .qa { background: #0d0d0d; border: 1px solid #1a1a1a; color: #666; font-size: 11px; padding: 7px 14px; border-radius: 20px; white-space: nowrap; cursor: pointer; flex-shrink: 0; font-family: inherit; }
         .qa:active { background: #1a1a1a; color: #999; }
 
-        /* INPUT */
-        #bottom {
-            flex-shrink: 0; padding: 10px 14px;
-            padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-            border-top: 1px solid #111;
-            display: flex; gap: 8px; align-items: flex-end;
-        }
-        #mic {
-            width: 42px; height: 42px; flex-shrink: 0;
-            background: #0d0d0d; border: 1px solid #1f1f1f;
-            border-radius: 50%; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 18px; color: #555;
-        }
+        #bottom { flex-shrink: 0; padding: 10px 14px; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid #111; display: flex; gap: 8px; align-items: flex-end; }
+        #mic { width: 42px; height: 42px; flex-shrink: 0; background: #0d0d0d; border: 1px solid #1f1f1f; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #555; }
         #mic.listening { border-color: #ff4444; color: #ff4444; background: #1a0000; }
-        #input {
-            flex: 1; background: #0d0d0d; border: 1px solid #1f1f1f;
-            color: #fff; padding: 11px 16px; font-size: 16px;
-            outline: none; font-family: inherit; border-radius: 22px;
-            resize: none; max-height: 100px; line-height: 1.4;
-        }
+        #input { flex: 1; background: #0d0d0d; border: 1px solid #1f1f1f; color: #fff; padding: 11px 16px; font-size: 16px; outline: none; font-family: inherit; border-radius: 22px; resize: none; max-height: 100px; line-height: 1.4; }
         #input::placeholder { color: #333; }
-        #send {
-            width: 42px; height: 42px; flex-shrink: 0;
-            background: #fff; color: #000; border: none;
-            border-radius: 50%; cursor: pointer;
-            font-size: 18px; font-weight: 700; display: flex;
-            align-items: center; justify-content: center;
-        }
+        #send { width: 42px; height: 42px; flex-shrink: 0; background: #fff; color: #000; border: none; border-radius: 50%; cursor: pointer; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
         #send:active { background: #ddd; }
-
-        .footer-hebrew {
-            text-align: center; font-size: 9px;
-            color: #111; letter-spacing: 4px; padding: 4px 0;
-            flex-shrink: 0;
-        }
-
+        .footer-hebrew { text-align: center; font-size: 9px; color: #111; letter-spacing: 4px; padding: 4px 0; flex-shrink: 0; }
         #chat::-webkit-scrollbar { width: 2px; }
-        #chat::-webkit-scrollbar-track { background: transparent; }
         #chat::-webkit-scrollbar-thumb { background: #1a1a1a; }
     </style>
 </head>
 <body>
 
-    <!-- LOCK SCREEN -->
-    <div id="lock">
-        <div class="lock-hebrew">מערכת בינה מלאכותית</div>
-        <div class="lock-logo">✡ BINA ✡</div>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-            <input class="lock-input" type="password" id="pin" placeholder="Enter passphrase" />
-            <div class="lock-error" id="lock-err"></div>
-            <button class="lock-btn" onclick="unlock()">Enter</button>
-        </div>
+<div id="lock">
+    <div class="lock-hebrew">מערכת בינה מלאכותית</div>
+    <div class="lock-logo">✡ BINA ✡</div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+        <input class="lock-input" type="password" id="pin" placeholder="Enter passphrase" />
+        <div class="lock-error" id="lock-err"></div>
+        <button class="lock-btn" onclick="unlock()">Enter</button>
     </div>
+</div>
 
-    <!-- MAIN APP -->
-    <header>
-        <div class="hebrew-accent">מערכת בינה מלאכותית</div>
-        <div class="logo"><span class="star">✡</span>BINA<span class="star">✡</span></div>
-        <div class="tagline">ALWAYS WORKING. NEVER SLEEPING.</div>
-    </header>
-
-    <div id="chat">
-        <div class="msg agent">Shalom. I am Bina, your personal AI agent. How may I assist you today?</div>
+<div id="notif-panel">
+    <div class="notif-header">
+        <h2>✡ INBOX</h2>
+        <button class="notif-close" onclick="closeNotifs()">✕</button>
     </div>
+    <div id="notif-list"></div>
+</div>
 
-    <div id="quick">
-        <button class="qa" onclick="quickSend('Send an email')">📧 Email</button>
-        <button class="qa" onclick="quickSend('Search the web for ')">🔍 Search</button>
-        <button class="qa" onclick="quickSend('What is on my schedule today?')">📅 Schedule</button>
-        <button class="qa" onclick="quickSend('Give me a quick business idea I can act on today')">💡 Ideas</button>
-        <button class="qa" onclick="quickSend('What should I be focused on right now?')">🎯 Focus</button>
-        <button class="qa" onclick="quickSend('Latest news and what matters to me')">📰 News</button>
-    </div>
+<header>
+    <div class="hebrew-accent">מערכת בינה מלאכותית</div>
+    <div class="logo"><span class="star">✡</span>BINA<span class="star">✡</span></div>
+    <div class="tagline">ALWAYS WORKING. NEVER SLEEPING.</div>
+    <button id="notif-btn" onclick="openNotifs()">
+        🔔
+        <span id="notif-badge"></span>
+    </button>
+</header>
 
-    <div id="bottom">
-        <button id="mic" onclick="toggleMic()" title="Voice input">🎤</button>
-        <textarea id="input" placeholder="Message Bina..." rows="1" oninput="autoResize(this)"></textarea>
-        <button id="send" onclick="send()">↑</button>
-    </div>
+<div id="chat">
+    <div class="msg agent">Shalom. I am Bina, your personal AI agent. How may I assist you today?</div>
+</div>
 
-    <div class="footer-hebrew">ב • י • נ • ה</div>
+<div id="quick">
+    <button class="qa" onclick="quickSend('Send an email')">📧 Email</button>
+    <button class="qa" onclick="quickSend('Search the web for ')">🔍 Search</button>
+    <button class="qa" onclick="quickSend('What is on my schedule today?')">📅 Schedule</button>
+    <button class="qa" onclick="quickSend('Give me a quick business idea I can act on today')">💡 Ideas</button>
+    <button class="qa" onclick="quickSend('What should I be focused on right now?')">🎯 Focus</button>
+    <button class="qa" onclick="quickSend('Latest news and what matters to me')">📰 News</button>
+</div>
 
-    <script>
-        // Check if already unlocked this session
-        if (sessionStorage.getItem('unlocked') === '1') {
-            document.getElementById('lock').classList.add('hidden');
+<div id="bottom">
+    <button id="mic" onclick="toggleMic()">🎤</button>
+    <textarea id="input" placeholder="Message Bina..." rows="1" oninput="autoResize(this)"></textarea>
+    <button id="send" onclick="send()">↑</button>
+</div>
+
+<div class="footer-hebrew">ב • י • נ • ה</div>
+
+<script>
+    if (sessionStorage.getItem('unlocked') === '1') {
+        document.getElementById('lock').classList.add('hidden');
+        startPolling();
+    }
+
+    document.getElementById('pin').addEventListener('keypress', e => {
+        if (e.key === 'Enter') unlock();
+    });
+
+    async function unlock() {
+        const val = document.getElementById('pin').value;
+        try {
+            const r = await fetch('/verify-passphrase', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                credentials: 'include',
+                body: JSON.stringify({passphrase: val})
+            });
+            const d = await r.json();
+            if (d.success) {
+                document.getElementById('lock').classList.add('hidden');
+                sessionStorage.setItem('unlocked', '1');
+                startPolling();
+            } else {
+                document.getElementById('lock-err').textContent = 'incorrect passphrase';
+                document.getElementById('pin').value = '';
+            }
+        } catch(e) {
+            document.getElementById('lock-err').textContent = 'connection error';
         }
+    }
 
-        document.getElementById('pin').addEventListener('keypress', e => {
-            if (e.key === 'Enter') unlock();
+    // ── Notifications ──────────────────────────────────────────────────────
+
+    let allNotifications = [];
+
+    function startPolling() {
+        pollNotifications();
+        setInterval(pollNotifications, 30000);
+    }
+
+    async function pollNotifications() {
+        try {
+            const r = await fetch('/notifications', {credentials: 'include'});
+            const d = await r.json();
+            allNotifications = d.notifications;
+            const badge = document.getElementById('notif-badge');
+            if (d.unread_count > 0) {
+                badge.textContent = d.unread_count;
+                badge.style.display = 'flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        } catch(e) {}
+    }
+
+    function openNotifs() {
+        document.getElementById('notif-panel').classList.add('open');
+        renderNotifs();
+    }
+
+    function closeNotifs() {
+        document.getElementById('notif-panel').classList.remove('open');
+        pollNotifications();
+    }
+
+    function renderNotifs() {
+        const list = document.getElementById('notif-list');
+        if (allNotifications.length === 0) {
+            list.innerHTML = '<div class="notif-empty">NO NEW MESSAGES</div>';
+            return;
+        }
+        list.innerHTML = allNotifications.map(n => `
+            <div class="notif-item ${n.read ? '' : 'unread'}" id="notif-${n.id}">
+                <div class="notif-from">${n.from}</div>
+                <div class="notif-subject">${n.subject}</div>
+                <div class="notif-body">${n.body}</div>
+                <div class="notif-draft-label">BINA'S DRAFT REPLY</div>
+                <div class="notif-draft" id="draft-${n.id}">${n.draft_reply}</div>
+                <div class="notif-actions">
+                    <button class="btn-send" onclick="sendDraft('${n.id}', '${escapeAttr(n.from)}', '${escapeAttr(n.subject)}')">✓ Send Reply</button>
+                    <button class="btn-edit" onclick="editDraft('${n.id}')">✎ Edit</button>
+                    <button class="btn-dismiss" onclick="dismissNotif('${n.id}')">Dismiss</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function escapeAttr(str) {
+        return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
+    async function sendDraft(id, from, subject) {
+        const draftEl = document.getElementById(`draft-${id}`);
+        const body = draftEl.textContent;
+        const toMatch = from.match(/<(.+)>/) || [null, from];
+        const to = toMatch[1];
+        const r = await fetch('/send-draft', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'include',
+            body: JSON.stringify({to, subject, body})
         });
-
-        async function unlock() {
-            const val = document.getElementById('pin').value;
-            try {
-                const r = await fetch('/verify-passphrase', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    credentials: 'include',
-                    body: JSON.stringify({passphrase: val})
-                });
-                const d = await r.json();
-                if (d.success) {
-                    document.getElementById('lock').classList.add('hidden');
-                    sessionStorage.setItem('unlocked', '1');
-                } else {
-                    document.getElementById('lock-err').textContent = 'incorrect passphrase';
-                    document.getElementById('pin').value = '';
-                }
-            } catch(e) {
-                document.getElementById('lock-err').textContent = 'connection error';
-            }
+        const d = await r.json();
+        if (d.success) {
+            document.getElementById(`notif-${id}`).style.opacity = '0.3';
+            await markRead(id);
         }
+    }
 
-        function autoResize(el) {
-            el.style.height = 'auto';
-            el.style.height = Math.min(el.scrollHeight, 100) + 'px';
-        }
+    function editDraft(id) {
+        const el = document.getElementById(`draft-${id}`);
+        el.contentEditable = 'true';
+        el.style.outline = '1px solid #00cc66';
+        el.focus();
+    }
 
-        document.getElementById('input').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-            }
+    async function dismissNotif(id) {
+        await markRead(id);
+        document.getElementById(`notif-${id}`).style.display = 'none';
+        pollNotifications();
+    }
+
+    async function markRead(id) {
+        await fetch(`/notifications/read/${id}`, {
+            method: 'POST',
+            credentials: 'include'
         });
+    }
 
-        function quickSend(text) {
-            document.getElementById('input').value = text;
-            if (!text.endsWith(' ')) send();
-            else document.getElementById('input').focus();
-        }
+    // ── Chat ───────────────────────────────────────────────────────────────
 
-        function addMsg(text, role) {
-            const chat = document.getElementById('chat');
-            const div = document.createElement('div');
-            div.className = 'msg ' + role;
-            div.innerHTML = text.replace(/\n/g, '<br>');
-            chat.appendChild(div);
-            chat.scrollTop = chat.scrollHeight;
-            return div;
-        }
+    function autoResize(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 100) + 'px';
+    }
 
-        function addEmailStatus(text, success) {
-            const chat = document.getElementById('chat');
-            const div = document.createElement('div');
-            div.className = 'email-status ' + (success ? 'sent' : 'failed');
-            div.textContent = text;
-            chat.appendChild(div);
-            chat.scrollTop = chat.scrollHeight;
-        }
+    document.getElementById('input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
 
-        let history = [];
+    function quickSend(text) {
+        document.getElementById('input').value = text;
+        if (!text.endsWith(' ')) send();
+        else document.getElementById('input').focus();
+    }
 
-        async function send() {
-            const input = document.getElementById('input');
-            const msg = input.value.trim();
-            if (!msg) return;
-            input.value = '';
-            input.style.height = 'auto';
-            addMsg(msg, 'user');
-            const typing = addMsg('···', 'agent typing');
+    function addMsg(text, role) {
+        const chat = document.getElementById('chat');
+        const div = document.createElement('div');
+        div.className = 'msg ' + role;
+        div.innerHTML = text.replace(/\n/g, '<br>');
+        chat.appendChild(div);
+        chat.scrollTop = chat.scrollHeight;
+        return div;
+    }
 
-            try {
-                const r = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    credentials: 'include',
-                    body: JSON.stringify({message: msg, history: history})
-                });
+    function addEmailStatus(text, success) {
+        const chat = document.getElementById('chat');
+        const div = document.createElement('div');
+        div.className = 'email-status ' + (success ? 'sent' : 'failed');
+        div.textContent = text;
+        chat.appendChild(div);
+        chat.scrollTop = chat.scrollHeight;
+    }
 
-                if (r.status === 401) {
-                    typing.className = 'msg agent';
-                    typing.textContent = 'Session expired. Please refresh and log in again.';
-                    sessionStorage.removeItem('unlocked');
-                    setTimeout(() => location.reload(), 2000);
-                    return;
-                }
+    let history = [];
 
-                const d = await r.json();
+    async function send() {
+        const input = document.getElementById('input');
+        const msg = input.value.trim();
+        if (!msg) return;
+        input.value = '';
+        input.style.height = 'auto';
+        addMsg(msg, 'user');
+        const typing = addMsg('···', 'agent typing');
+        try {
+            const r = await fetch('/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                credentials: 'include',
+                body: JSON.stringify({message: msg, history: history})
+            });
+            if (r.status === 401) {
                 typing.className = 'msg agent';
-                typing.innerHTML = d.response.replace(/\n/g, '<br>');
-
-                // Show email status
-                if (d.email_sent) addEmailStatus(d.email_sent, true);
-                if (d.email_error) addEmailStatus(d.email_error, false);
-
-                // Update history
-                history.push({role: 'user', content: msg});
-                history.push({role: 'assistant', content: d.response});
-
-                // Keep history to last 20 messages
-                if (history.length > 20) history = history.slice(-20);
-
-            } catch(e) {
-                typing.className = 'msg agent';
-                typing.textContent = 'Connection error. Try again.';
-            }
-
-            document.getElementById('chat').scrollTop = 99999;
-        }
-
-        // VOICE INPUT
-        let recognition = null;
-        function toggleMic() {
-            const mic = document.getElementById('mic');
-            if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-                addMsg('Voice input not supported on this browser. Use Safari on iPhone.', 'agent');
+                typing.textContent = 'Session expired. Refreshing...';
+                sessionStorage.removeItem('unlocked');
+                setTimeout(() => location.reload(), 2000);
                 return;
             }
-            if (recognition) {
-                recognition.stop();
-                recognition = null;
-                mic.classList.remove('listening');
-                return;
-            }
-            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SR();
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            recognition.lang = 'en-US';
-            recognition.onresult = e => {
-                document.getElementById('input').value = e.results[0][0].transcript;
-                mic.classList.remove('listening');
-                recognition = null;
-                send();
-            };
-            recognition.onerror = () => {
-                mic.classList.remove('listening');
-                recognition = null;
-            };
-            recognition.onend = () => {
-                mic.classList.remove('listening');
-                recognition = null;
-            };
-            recognition.start();
-            mic.classList.add('listening');
+            const d = await r.json();
+            typing.className = 'msg agent';
+            typing.innerHTML = d.response.replace(/\n/g, '<br>');
+            if (d.email_sent) addEmailStatus(d.email_sent, true);
+            if (d.email_error) addEmailStatus(d.email_error, false);
+            history.push({role: 'user', content: msg});
+            history.push({role: 'assistant', content: d.response});
+            if (history.length > 20) history = history.slice(-20);
+        } catch(e) {
+            typing.className = 'msg agent';
+            typing.textContent = 'Connection error. Try again.';
         }
-    </script>
+        document.getElementById('chat').scrollTop = 99999;
+    }
+
+    // ── Voice ──────────────────────────────────────────────────────────────
+
+    let recognition = null;
+    function toggleMic() {
+        const mic = document.getElementById('mic');
+        if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+            addMsg('Voice input not supported. Use Safari on iPhone.', 'agent');
+            return;
+        }
+        if (recognition) { recognition.stop(); recognition = null; mic.classList.remove('listening'); return; }
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SR();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+        recognition.onresult = e => {
+            document.getElementById('input').value = e.results[0][0].transcript;
+            mic.classList.remove('listening');
+            recognition = null;
+            send();
+        };
+        recognition.onerror = () => { mic.classList.remove('listening'); recognition = null; };
+        recognition.onend = () => { mic.classList.remove('listening'); recognition = null; };
+        recognition.start();
+        mic.classList.add('listening');
+    }
+</script>
 </body>
 </html>
