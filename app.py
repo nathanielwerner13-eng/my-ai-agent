@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from anthropic import Anthropic
 from dotenv import load_dotenv
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 import resend
 import os
 import json
