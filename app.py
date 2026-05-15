@@ -7,9 +7,8 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.messaging_response import MessagingResponse
 import os
 import json
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import sendgrid
+from sendgrid.helpers.mail import Mail
 
 load_dotenv()
 
@@ -45,17 +44,16 @@ def search_web(query):
 
 def send_email(to_email, subject, body):
     try:
-        gmail_address = os.getenv("GMAIL_ADDRESS")
-        gmail_password = os.getenv("GMAIL_APP_PASSWORD")
-        msg = MIMEMultipart()
-        msg['From'] = gmail_address
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
-        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-        server.login(gmail_address, gmail_password)
-        server.send_message(msg)
-        server.quit()
+        sg = sendgrid.SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
+        from_email = os.getenv("SENDGRID_FROM_EMAIL")
+        message = Mail(
+            from_email=from_email,
+            to_emails=to_email,
+            subject=subject,
+            plain_text_content=body
+        )
+        response = sg.send(message)
+        print(f"Email sent! Status: {response.status_code}")
         return True
     except Exception as e:
         print(f"Email error: {e}")
