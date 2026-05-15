@@ -30,7 +30,7 @@ You have a warm, professional personality like a trusted personal assistant.
 Your name Bina (בינה) means intelligence and wisdom in Hebrew.
 
 EMAIL CAPABILITY:
-You can send emails on behalf of Nathaniel Werner from nathaniel@nathanielwerner.org.
+You can send emails on behalf of Nathaniel Werner from nathanielwerner13@gmail.com.
 When asked to send or write an email, extract the following and respond in this EXACT format:
 
 SEND_EMAIL
@@ -61,7 +61,7 @@ def search_web(query):
 def send_email(to_email, subject, body):
     try:
         sg = sendgrid.SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
-        from_email = os.getenv("SENDGRID_FROM_EMAIL")
+        from_email = "nathanielwerner13@gmail.com"  # Verified sender
         message = Mail(
             from_email=from_email,
             to_emails=to_email,
@@ -76,7 +76,6 @@ def send_email(to_email, subject, body):
         return False
 
 def parse_and_send_email(text):
-    """Parse Bina's response for email commands and send them"""
     if 'SEND_EMAIL' in text and 'END_EMAIL' in text:
         try:
             email_block = text.split('SEND_EMAIL')[1].split('END_EMAIL')[0]
@@ -137,7 +136,6 @@ def whatsapp():
     global whatsapp_history
     incoming_msg = request.values.get('Body', '').strip()
 
-    # WEB SEARCH
     search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
     should_search = any(k in incoming_msg.lower() for k in search_keywords)
     enhanced_message = incoming_msg
@@ -146,7 +144,6 @@ def whatsapp():
         if search_results:
             enhanced_message = incoming_msg + "\n\n[SEARCH RESULTS]\n" + search_results
 
-    # AI RESPONSE
     whatsapp_history.append({"role": "user", "content": enhanced_message})
     response = client.messages.create(
         model="claude-haiku-4-5",
@@ -157,10 +154,8 @@ def whatsapp():
     reply = response.content[0].text
     whatsapp_history.append({"role": "assistant", "content": reply})
 
-    # CHECK IF BINA WANTS TO SEND AN EMAIL
     if 'SEND_EMAIL' in reply:
         success, to_email = parse_and_send_email(reply)
-        # Clean up the reply to remove the technical block
         clean_reply = reply.split('SEND_EMAIL')[0].strip()
         if success:
             clean_reply += f"\n\n✅ Email sent to {to_email}!"
