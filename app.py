@@ -52,8 +52,7 @@ def send_email(to_email, subject, body):
         msg['To'] = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
         server.login(gmail_address, gmail_password)
         server.send_message(msg)
         server.quit()
@@ -105,7 +104,7 @@ def whatsapp():
     global whatsapp_history
     incoming_msg = request.values.get('Body', '').strip()
 
-    # EMAIL SEND COMMAND — must be checked FIRST before AI sees the message
+    # EMAIL SEND COMMAND — checked FIRST before AI sees the message
     if incoming_msg.lower().startswith('send email'):
         parts = incoming_msg.split('|')
         if len(parts) == 4:
