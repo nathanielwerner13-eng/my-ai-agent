@@ -6,3 +6,4 @@ duckduckgo-search
 ddgs
 gunicorn
 twilio
+sendgrid
