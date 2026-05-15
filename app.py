@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, redirect
 from flask_cors import CORS
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -10,6 +10,7 @@ import base64
 from email.mime.text import MIMEText
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 load_dotenv()
@@ -20,6 +21,12 @@ client = Anthropic()
 
 conversation_history = []
 MEMORY_FILE = "memory.json"
+
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify"
+]
 
 SYSTEM_PROMPT = """You are Bina, a personal AI assistant and autonomous agent for Nathaniel Werner.
 You are proactive, organized, and remember context throughout conversations.
@@ -49,11 +56,7 @@ def get_gmail_service():
         token_uri="https://oauth2.googleapis.com/token",
         client_id=os.environ.get("GOOGLE_CLIENT_ID"),
         client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
-        scopes=[
-            "https://www.googleapis.com/auth/gmail.send",
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/gmail.modify"
-        ]
+        scopes=SCOPES
     )
     creds.refresh(Request())
     return build("gmail", "v1", credentials=creds)
@@ -66,14 +69,11 @@ def send_email(to_email, subject, body):
         message["from"] = "nathanielwerner13@gmail.com"
         message["subject"] = subject
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        service.users().messages().send(
-            userId="me",
-            body={"raw": raw}
-        ).execute()
-        print(f"Email sent via Gmail API to {to_email}")
+        service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"Email sent to {to_email}")
         return True
     except Exception as e:
-        print(f"Gmail API error: {e}")
+        print(f"Gmail error: {e}")
         return False
 
 def parse_and_send_email(text):
@@ -130,6 +130,44 @@ def home():
 @app.route('/manifest.json')
 def manifest():
     return send_from_directory('.', 'manifest.json')
+
+@app.route('/authorize')
+def authorize():
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
+                "client_secret": os.environ.get("GOOGLE_CLIENT_SECRET"),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["https://my-ai-agent-production-5e17.up.railway.app/oauth/callback"]
+            }
+        },
+        scopes=SCOPES
+    )
+    flow.redirect_uri = "https://my-ai-agent-production-5e17.up.railway.app/oauth/callback"
+    auth_url, state = flow.authorization_url(access_type='offline', prompt='consent')
+    return redirect(auth_url)
+
+@app.route('/oauth/callback')
+def oauth_callback():
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
+                "client_secret": os.environ.get("GOOGLE_CLIENT_SECRET"),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["https://my-ai-agent-production-5e17.up.railway.app/oauth/callback"]
+            }
+        },
+        scopes=SCOPES
+    )
+    flow.redirect_uri = "https://my-ai-agent-production-5e17.up.railway.app/oauth/callback"
+    flow.fetch_token(authorization_response=request.url)
+    creds = flow.credentials
+    print("NEW REFRESH TOKEN:", creds.refresh_token)
+    return f"<h1>Success!</h1><p>Refresh token: {creds.refresh_token}</p><p>Copy this and add it to Railway as GOOGLE_REFRESH_TOKEN</p>"
 
 @app.route('/chat', methods=['POST'])
 def chat():
