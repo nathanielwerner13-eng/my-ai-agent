@@ -7,9 +7,7 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.messaging_response import MessagingResponse
 import os
 import json
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend
 import re
 
 load_dotenv()
@@ -61,23 +59,20 @@ def search_web(query):
 
 def send_email(to_email, subject, body):
     try:
-        gmail_address = os.getenv("GMAIL_ADDRESS")
-        gmail_password = os.getenv("GMAIL_APP_PASSWORD")
+        resend.api_key = os.getenv("RESEND_API_KEY")
 
-        msg = MIMEMultipart()
-        msg['From'] = f"Nathaniel Werner <{gmail_address}>"
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
+        params = {
+            "from": "Nathaniel Werner <onboarding@resend.dev>",
+            "to": [to_email],
+            "subject": subject,
+            "text": body,
+        }
 
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(gmail_address, gmail_password)
-            server.sendmail(gmail_address, to_email, msg.as_string())
-
-        print(f"Email sent via Gmail SMTP to {to_email}")
+        email = resend.Emails.send(params)
+        print(f"Email sent via Resend to {to_email} | ID: {email['id']}")
         return True
     except Exception as e:
-        print(f"Email error: {e}")
+        print(f"Resend email error: {e}")
         return False
 
 def parse_and_send_email(text):
@@ -98,6 +93,14 @@ def parse_and_send_email(text):
             print(f"Parse error: {e}")
     return False, None
 
+def clean_response(text):
+    """Remove raw SEND_EMAIL blocks from chat UI display"""
+    if 'SEND_EMAIL' in text and 'END_EMAIL' in text:
+        before = text.split('SEND_EMAIL')[0].strip()
+        after = text.split('END_EMAIL')[-1].strip()
+        return (before + "\n\n" + after).strip()
+    return text
+
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         with open(MEMORY_FILE, 'r') as f:
@@ -117,6 +120,7 @@ def chat():
     global conversation_history
     data = request.json
     user_message = data.get('message', '')
+
     search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
     should_search = any(k in user_message.lower() for k in search_keywords)
     enhanced_message = user_message
@@ -124,17 +128,31 @@ def chat():
         search_results = search_web(user_message)
         if search_results:
             enhanced_message = user_message + "\n\n[SEARCH RESULTS]\n" + search_results
+
     conversation_history.append({"role": "user", "content": enhanced_message})
+
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=8096,
         system=SYSTEM_PROMPT,
         messages=conversation_history
     )
+
     assistant_message = response.content[0].text
     conversation_history.append({"role": "assistant", "content": assistant_message})
     save_memory(conversation_history)
-    return jsonify({"response": assistant_message})
+
+    # Handle email sending
+    display_message = assistant_message
+    if 'SEND_EMAIL' in assistant_message:
+        success, to_email = parse_and_send_email(assistant_message)
+        display_message = clean_response(assistant_message)
+        if success:
+            display_message += f"\n\n✅ Email sent to {to_email}!"
+        else:
+            display_message += f"\n\n❌ Email failed. Check Railway logs."
+
+    return jsonify({"response": display_message})
 
 @app.route('/whatsapp', methods=['POST'])
 def whatsapp():
@@ -150,22 +168,24 @@ def whatsapp():
             enhanced_message = incoming_msg + "\n\n[SEARCH RESULTS]\n" + search_results
 
     whatsapp_history.append({"role": "user", "content": enhanced_message})
+
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=1500,
         system=SYSTEM_PROMPT,
         messages=whatsapp_history
     )
+
     reply = response.content[0].text
     whatsapp_history.append({"role": "assistant", "content": reply})
 
     if 'SEND_EMAIL' in reply:
         success, to_email = parse_and_send_email(reply)
-        clean_reply = reply.split('SEND_EMAIL')[0].strip()
+        clean_reply = clean_response(reply)
         if success:
             clean_reply += f"\n\n✅ Email sent to {to_email}!"
         else:
-            clean_reply += f"\n\n❌ Failed to send email. Please try again."
+            clean_reply += f"\n\n❌ Email failed."
         reply = clean_reply
 
     resp = MessagingResponse()
