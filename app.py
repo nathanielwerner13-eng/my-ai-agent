@@ -3,11 +3,9 @@ from flask_cors import CORS
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from ddgs import DDGS
-from twilio.rest import Client as TwilioClient
-from twilio.twiml.messaging_response import MessagingResponse
+import resend
 import os
 import json
-import resend
 import re
 
 load_dotenv()
@@ -15,10 +13,8 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 client = Anthropic()
-twilio_client = TwilioClient(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
 
 conversation_history = []
-whatsapp_history = []
 MEMORY_FILE = "memory.json"
 
 SYSTEM_PROMPT = """You are Bina, a personal AI assistant and autonomous agent for Nathaniel Werner.
@@ -29,8 +25,8 @@ You have a warm, professional personality like a trusted personal assistant.
 Your name Bina (בינה) means intelligence and wisdom in Hebrew.
 
 EMAIL CAPABILITY:
-You can send emails on behalf of Nathaniel Werner from nathanielwerner13@gmail.com.
-When asked to send or write an email, extract the following and respond in this EXACT format:
+You can send emails on behalf of Nathaniel Werner.
+When asked to send or write an email, respond in this EXACT format:
 
 SEND_EMAIL
 TO: [email address]
@@ -40,8 +36,6 @@ END_EMAIL
 
 Always write professional, personalized emails. Sign off as Nathaniel Werner.
 If the user doesn't provide an email address, ask for it before drafting.
-If the user says something like "email Jason at jason@gmail.com about lunch", 
-extract the email, write a professional message, and use the SEND_EMAIL format.
 After sending confirm with a friendly message."""
 
 def search_web(query):
@@ -59,20 +53,18 @@ def search_web(query):
 
 def send_email(to_email, subject, body):
     try:
-        resend.api_key = os.getenv("RESEND_API_KEY")
-
+        resend.api_key = os.environ.get("RESEND_API_KEY")
         params = {
             "from": "Nathaniel Werner <onboarding@resend.dev>",
             "to": [to_email],
             "subject": subject,
             "text": body,
         }
-
         email = resend.Emails.send(params)
         print(f"Email sent via Resend to {to_email} | ID: {email['id']}")
         return True
     except Exception as e:
-        print(f"Resend email error: {e}")
+        print(f"Resend error: {e}")
         return False
 
 def parse_and_send_email(text):
@@ -82,7 +74,6 @@ def parse_and_send_email(text):
             to_match = re.search(r'TO:\s*(.+)', email_block)
             subject_match = re.search(r'SUBJECT:\s*(.+)', email_block)
             body_match = re.search(r'BODY:\s*([\s\S]+)', email_block)
-
             if to_match and subject_match and body_match:
                 to_email = to_match.group(1).strip()
                 subject = subject_match.group(1).strip()
@@ -94,7 +85,6 @@ def parse_and_send_email(text):
     return False, None
 
 def clean_response(text):
-    """Remove raw SEND_EMAIL blocks from chat UI display"""
     if 'SEND_EMAIL' in text and 'END_EMAIL' in text:
         before = text.split('SEND_EMAIL')[0].strip()
         after = text.split('END_EMAIL')[-1].strip()
@@ -142,7 +132,6 @@ def chat():
     conversation_history.append({"role": "assistant", "content": assistant_message})
     save_memory(conversation_history)
 
-    # Handle email sending
     display_message = assistant_message
     if 'SEND_EMAIL' in assistant_message:
         success, to_email = parse_and_send_email(assistant_message)
@@ -153,58 +142,6 @@ def chat():
             display_message += f"\n\n❌ Email failed. Check Railway logs."
 
     return jsonify({"response": display_message})
-
-@app.route('/whatsapp', methods=['POST'])
-def whatsapp():
-    global whatsapp_history
-    incoming_msg = request.values.get('Body', '').strip()
-
-    search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
-    should_search = any(k in incoming_msg.lower() for k in search_keywords)
-    enhanced_message = incoming_msg
-    if should_search:
-        search_results = search_web(incoming_msg)
-        if search_results:
-            enhanced_message = incoming_msg + "\n\n[SEARCH RESULTS]\n" + search_results
-
-    whatsapp_history.append({"role": "user", "content": enhanced_message})
-
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=1500,
-        system=SYSTEM_PROMPT,
-        messages=whatsapp_history
-    )
-
-    reply = response.content[0].text
-    whatsapp_history.append({"role": "assistant", "content": reply})
-
-    if 'SEND_EMAIL' in reply:
-        success, to_email = parse_and_send_email(reply)
-        clean_reply = clean_response(reply)
-        if success:
-            clean_reply += f"\n\n✅ Email sent to {to_email}!"
-        else:
-            clean_reply += f"\n\n❌ Email failed."
-        reply = clean_reply
-
-    resp = MessagingResponse()
-    resp.message(reply)
-    return str(resp)
-
-@app.route('/send-email', methods=['POST'])
-def send_email_route():
-    data = request.json
-    to_email = data.get('to', '')
-    subject = data.get('subject', '')
-    body = data.get('body', '')
-    if not to_email or not subject or not body:
-        return jsonify({"status": "error", "message": "Missing required fields"})
-    success = send_email(to_email, subject, body)
-    if success:
-        return jsonify({"status": "success", "message": f"Email sent to {to_email}"})
-    else:
-        return jsonify({"status": "error", "message": "Failed to send email"})
 
 @app.route('/history', methods=['GET'])
 def get_history():
@@ -219,4 +156,5 @@ def clear_history():
 
 if __name__ == '__main__':
     conversation_history = load_memory()
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=False, host='0.0.0.0', port=port)
