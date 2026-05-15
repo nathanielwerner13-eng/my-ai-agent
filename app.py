@@ -7,6 +7,9 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.messaging_response import MessagingResponse
 import os
 import json
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
@@ -24,7 +27,12 @@ You are proactive, organized, and remember context throughout conversations.
 You have access to web search. When asked about current events, news, prices,
 or anything requiring up-to-date information, use the search results provided.
 You have a warm, professional personality like a trusted personal assistant.
-Your name Bina (בינה) means intelligence and wisdom in Hebrew."""
+Your name Bina (בינה) means intelligence and wisdom in Hebrew.
+
+You can send emails on behalf of Nathaniel Werner. When asked to send an email,
+always confirm the recipient, subject, and body before sending. Write professional,
+personalized emails appropriate for the context (internship inquiries, business
+proposals, networking, etc.)."""
 
 def search_web(query):
     try:
@@ -38,6 +46,27 @@ def search_web(query):
     except:
         pass
     return ""
+
+def send_email(to_email, subject, body):
+    try:
+        gmail_address = os.getenv("GMAIL_ADDRESS")
+        gmail_password = os.getenv("GMAIL_APP_PASSWORD")
+        
+        msg = MIMEMultipart()
+        msg['From'] = gmail_address
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(gmail_address, gmail_password)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Email error: {e}")
+        return False
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
@@ -84,7 +113,7 @@ def chat():
 def whatsapp():
     global whatsapp_history
     incoming_msg = request.values.get('Body', '').strip()
-    
+
     search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
     should_search = any(k in incoming_msg.lower() for k in search_keywords)
 
@@ -93,6 +122,26 @@ def whatsapp():
         search_results = search_web(incoming_msg)
         if search_results:
             enhanced_message = incoming_msg + "\n\n[SEARCH RESULTS]\n" + search_results
+
+    # Check if user wants to send an email
+    if incoming_msg.lower().startswith('send email'):
+        parts = incoming_msg.split('|')
+        if len(parts) == 4:
+            to_email = parts[1].strip()
+            subject = parts[2].strip()
+            body = parts[3].strip()
+            success = send_email(to_email, subject, body)
+            reply = f"✅ Email sent to {to_email}!" if success else "❌ Failed to send email. Please try again."
+        else:
+            reply = "To send an email, use this format:\nsend email | recipient@email.com | Subject | Email body here"
+        
+        resp = MessagingResponse()
+        resp.message(reply)
+        return str(resp)
+
+    # Check if user wants Bina to write and send an email
+    if 'draft email' in incoming_msg.lower() or 'write email' in incoming_msg.lower() or 'email to' in incoming_msg.lower():
+        enhanced_message = incoming_msg + "\n\nPlease draft a professional email for Nathaniel Werner. Format your response as:\nTO: [email if known]\nSUBJECT: [subject]\nBODY:\n[email body]\n\nThen ask for approval before sending."
 
     whatsapp_history.append({"role": "user", "content": enhanced_message})
     response = client.messages.create(
@@ -107,6 +156,22 @@ def whatsapp():
     resp = MessagingResponse()
     resp.message(reply)
     return str(resp)
+
+@app.route('/send-email', methods=['POST'])
+def send_email_route():
+    data = request.json
+    to_email = data.get('to', '')
+    subject = data.get('subject', '')
+    body = data.get('body', '')
+    
+    if not to_email or not subject or not body:
+        return jsonify({"status": "error", "message": "Missing required fields"})
+    
+    success = send_email(to_email, subject, body)
+    if success:
+        return jsonify({"status": "success", "message": f"Email sent to {to_email}"})
+    else:
+        return jsonify({"status": "error", "message": "Failed to send email"})
 
 @app.route('/history', methods=['GET'])
 def get_history():
