@@ -9,6 +9,7 @@ import os
 import json
 import sendgrid
 from sendgrid.helpers.mail import Mail
+import re
 
 load_dotenv()
 
@@ -21,13 +22,28 @@ conversation_history = []
 whatsapp_history = []
 MEMORY_FILE = "memory.json"
 
-SYSTEM_PROMPT = """You are Bina, a personal AI assistant and autonomous agent.
+SYSTEM_PROMPT = """You are Bina, a personal AI assistant and autonomous agent for Nathaniel Werner.
 You are proactive, organized, and remember context throughout conversations.
 You have access to web search. When asked about current events, news, prices,
 or anything requiring up-to-date information, use the search results provided.
 You have a warm, professional personality like a trusted personal assistant.
 Your name Bina (בינה) means intelligence and wisdom in Hebrew.
-You can send emails on behalf of Nathaniel Werner using the send email command."""
+
+EMAIL CAPABILITY:
+You can send emails on behalf of Nathaniel Werner from nathaniel@nathanielwerner.org.
+When asked to send or write an email, extract the following and respond in this EXACT format:
+
+SEND_EMAIL
+TO: [email address]
+SUBJECT: [subject line]
+BODY: [full email body]
+END_EMAIL
+
+Always write professional, personalized emails. Sign off as Nathaniel Werner.
+If the user doesn't provide an email address, ask for it before drafting.
+If the user says something like "email Jason at jason@gmail.com about lunch", 
+extract the email, write a professional message, and use the SEND_EMAIL format.
+After sending confirm with a friendly message."""
 
 def search_web(query):
     try:
@@ -58,6 +74,25 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print(f"Email error: {e}")
         return False
+
+def parse_and_send_email(text):
+    """Parse Bina's response for email commands and send them"""
+    if 'SEND_EMAIL' in text and 'END_EMAIL' in text:
+        try:
+            email_block = text.split('SEND_EMAIL')[1].split('END_EMAIL')[0]
+            to_match = re.search(r'TO:\s*(.+)', email_block)
+            subject_match = re.search(r'SUBJECT:\s*(.+)', email_block)
+            body_match = re.search(r'BODY:\s*([\s\S]+)', email_block)
+            
+            if to_match and subject_match and body_match:
+                to_email = to_match.group(1).strip()
+                subject = subject_match.group(1).strip()
+                body = body_match.group(1).strip()
+                success = send_email(to_email, subject, body)
+                return success, to_email
+        except Exception as e:
+            print(f"Parse error: {e}")
+    return False, None
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
@@ -102,21 +137,6 @@ def whatsapp():
     global whatsapp_history
     incoming_msg = request.values.get('Body', '').strip()
 
-    # EMAIL SEND COMMAND — checked FIRST before AI sees the message
-    if incoming_msg.lower().startswith('send email'):
-        parts = incoming_msg.split('|')
-        if len(parts) == 4:
-            to_email = parts[1].strip()
-            subject = parts[2].strip()
-            body = parts[3].strip()
-            success = send_email(to_email, subject, body)
-            reply = f"✅ Email sent to {to_email}!" if success else "❌ Failed to send email. Please try again."
-        else:
-            reply = "To send an email use this format:\nsend email | recipient@email.com | Subject Here | Email body here"
-        resp = MessagingResponse()
-        resp.message(reply)
-        return str(resp)
-
     # WEB SEARCH
     search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
     should_search = any(k in incoming_msg.lower() for k in search_keywords)
@@ -126,20 +146,28 @@ def whatsapp():
         if search_results:
             enhanced_message = incoming_msg + "\n\n[SEARCH RESULTS]\n" + search_results
 
-    # EMAIL DRAFT REQUEST
-    if 'draft email' in incoming_msg.lower() or 'write email' in incoming_msg.lower() or 'email to' in incoming_msg.lower():
-        enhanced_message = incoming_msg + "\n\nPlease draft a professional email for Nathaniel Werner. Format your response as:\nTO: [email]\nSUBJECT: [subject]\nBODY:\n[email body]\n\nThen tell the user to reply with:\nsend email | to@email.com | Subject | Body\nto actually send it."
-
     # AI RESPONSE
     whatsapp_history.append({"role": "user", "content": enhanced_message})
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=1000,
+        max_tokens=1500,
         system=SYSTEM_PROMPT,
         messages=whatsapp_history
     )
     reply = response.content[0].text
     whatsapp_history.append({"role": "assistant", "content": reply})
+
+    # CHECK IF BINA WANTS TO SEND AN EMAIL
+    if 'SEND_EMAIL' in reply:
+        success, to_email = parse_and_send_email(reply)
+        # Clean up the reply to remove the technical block
+        clean_reply = reply.split('SEND_EMAIL')[0].strip()
+        if success:
+            clean_reply += f"\n\n✅ Email sent to {to_email}!"
+        else:
+            clean_reply += f"\n\n❌ Failed to send email. Please try again."
+        reply = clean_reply
+
     resp = MessagingResponse()
     resp.message(reply)
     return str(resp)
