@@ -5,6 +5,7 @@ import base64
 import requests
 import threading
 import time
+import datetime
 from urllib.parse import urlencode
 from email.mime.text import MIMEText
 from flask import Flask, request, jsonify, session, redirect
@@ -31,12 +32,15 @@ You manage his personal life, business, investments, education, and help build t
 
 You are proactive, intelligent, direct, and treat Nathaniel as a capable adult. You never add unnecessary caveats. You think ahead, spot opportunities, and help him move fast.
 
-You can:
-- Send emails by outputting exactly: SEND_EMAIL|to@email.com|Subject Line|Body text here END_EMAIL
-- Create calendar events by outputting exactly: CREATE_EVENT|Title|2026-05-16T10:00:00|2026-05-16T11:00:00|Description END_EVENT
-- Search the web when needed for current information
-- Remember important information across conversations
-- Help with business strategy, investments, scheduling, research, and execution
+You can send emails by outputting exactly on its own line:
+SEND_EMAIL|to@email.com|Subject Line|Body text here END_EMAIL
+
+You can create calendar events by outputting exactly on its own line:
+CREATE_EVENT|Event Title|2026-05-16T10:00:00|2026-05-16T11:00:00|Description here END_EVENT
+
+The current date and time in Los Angeles will be injected into every message automatically. Always use it for scheduling.
+
+You can search the web, remember information, and help with anything Nathaniel needs.
 
 Always be concise unless depth is needed. Think like a brilliant chief of staff who is always one step ahead."""
 
@@ -184,7 +188,7 @@ def draft_reply(email):
         response = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=500,
-            system="You are Bina, drafting a reply on behalf of Nathaniel Werner, 18-year-old entrepreneur in Beverly Hills. Write a concise, professional reply. Just write the reply body — no subject, no greeting header, just the message text.",
+            system="You are Bina, drafting a reply on behalf of Nathaniel Werner, 18-year-old entrepreneur in Beverly Hills. Write a concise, professional reply. Just write the reply body only — no subject line, no greeting header, just the message text and sign off with Nathaniel Werner.",
             messages=[{"role": "user", "content": f"Draft a reply to this email:\n\nFrom: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"}]
         )
         return response.content[0].text
@@ -197,7 +201,7 @@ def draft_reply(email):
 def get_upcoming_events(max_results=10):
     try:
         access_token = get_access_token()
-        now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
         response = requests.get(
             'https://www.googleapis.com/calendar/v3/calendars/primary/events',
             headers={'Authorization': f'Bearer {access_token}'},
@@ -222,7 +226,7 @@ def get_upcoming_events(max_results=10):
             })
         return events
     except Exception as e:
-        print(f"Calendar error: {str(e)}")
+        print(f"Calendar read error: {str(e)}")
         return []
 
 def create_calendar_event(title, start, end, description=''):
@@ -239,6 +243,7 @@ def create_calendar_event(title, start, end, description=''):
             headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'},
             json=event
         )
+        print(f"Calendar create: {response.status_code} {response.text[:200]}")
         if response.status_code in [200, 201]:
             return True, response.json().get('htmlLink', '')
         else:
@@ -247,12 +252,17 @@ def create_calendar_event(title, start, end, description=''):
         return False, str(e)
 
 def process_calendar_commands(text):
-    pattern = r'CREATE_EVENT\|(.*?)\|(.*?)\|(.*?)\|(.*?)END_EVENT'
+    pattern = r'CREATE_EVENT\|([^\|]+)\|([^\|]+)\|([^\|]+)\|?([^E]*)END_EVENT'
     matches = re.findall(pattern, text, re.DOTALL)
     results = []
-    for title, start, end, description in matches:
-        success, link = create_calendar_event(title.strip(), start.strip(), end.strip(), description.strip())
-        results.append({'title': title.strip(), 'success': success, 'link': link})
+    for match in matches:
+        title = match[0].strip()
+        start = match[1].strip()
+        end = match[2].strip()
+        description = match[3].strip() if match[3] else ''
+        print(f"Creating event: {title} {start} {end}")
+        success, link = create_calendar_event(title, start, end, description)
+        results.append({'title': title, 'success': success, 'link': link})
     return results
 
 
@@ -282,9 +292,9 @@ def monitor_inbox():
     last_briefing_day = -1
     while True:
         try:
-            # Morning briefing at 7am LA time
-            la_hour = (time.gmtime().tm_hour - 7) % 24
-            la_day = time.gmtime().tm_yday
+            la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
+            la_hour = la_time.hour
+            la_day = la_time.timetuple().tm_yday
             if la_hour == 7 and la_day != last_briefing_day:
                 briefing = generate_morning_briefing()
                 add_notification({
@@ -299,7 +309,6 @@ def monitor_inbox():
                 })
                 last_briefing_day = la_day
 
-            # Check inbox
             seen = load_seen_emails()
             emails = get_inbox_emails(max_results=10)
             for email in emails:
@@ -323,7 +332,7 @@ def monitor_inbox():
         time.sleep(60)
 
 
-# ── Email/Calendar Command Processing ────────────────────────────────────────
+# ── Email Command Processing ──────────────────────────────────────────────────
 
 def process_email_commands(text):
     pattern = r'SEND_EMAIL\|(.*?)\|(.*?)\|(.*?)END_EMAIL'
@@ -395,7 +404,7 @@ def get_calendar():
     return jsonify({'events': events})
 
 @app.route('/calendar/create', methods=['POST'])
-def create_event():
+def create_event_route():
     data = request.json
     success, link = create_calendar_event(
         data.get('title'),
@@ -414,6 +423,19 @@ def test_email():
     else:
         return f'<h2 style="color:red;font-family:monospace">❌ Failed: {error}</h2><p style="font-family:monospace">Token: {token[:30]}...</p>'
 
+@app.route('/test-calendar')
+def test_calendar():
+    success, result = create_calendar_event(
+        'Bina Test Event',
+        '2026-05-16T10:00:00',
+        '2026-05-16T11:00:00',
+        'Created by Bina'
+    )
+    if success:
+        return f'<h2 style="color:green;font-family:monospace">✅ Calendar event created!</h2><p>{result}</p>'
+    else:
+        return f'<h2 style="color:red;font-family:monospace">❌ Failed: {result}</h2>'
+
 @app.route('/chat', methods=['POST'])
 def chat():
     if not session.get('authenticated'):
@@ -423,33 +445,30 @@ def chat():
     user_message = data.get('message', '')
     conversation_history = data.get('history', [])
 
-    search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news', 'current', 'today', 'price', 'stock', 'weather']
+    la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
+    la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
+    user_message_with_context = f"[Current date and time in Los Angeles: {la_time_str}]\n\n{user_message}"
+
+    search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news', 'current', 'price', 'stock', 'weather']
     if any(word in user_message.lower() for word in search_triggers):
         search_results = web_search(user_message)
-        user_message_with_context = f"{user_message}\n\nSearch results:\n{search_results}"
-    else:
-        user_message_with_context = user_message
+        user_message_with_context += f"\n\nSearch results:\n{search_results}"
 
-    # Inject calendar context if scheduling related
-    calendar_triggers = ['schedule', 'calendar', 'event', 'meeting', 'appointment', 'tomorrow', 'next week', 'briefing']
+    calendar_triggers = ['schedule', 'calendar', 'event', 'meeting', 'appointment', 'tomorrow', 'next week', 'briefing', 'what do i have']
     if any(word in user_message.lower() for word in calendar_triggers):
         events = get_upcoming_events(max_results=5)
         if events:
             events_text = "\n".join([f"- {e['title']} at {e['start']}" for e in events])
-            user_message_with_context += f"\n\nUpcoming calendar events:\n{events_text}"
+            user_message_with_context += f"\n\nYour upcoming calendar events:\n{events_text}"
+        else:
+            user_message_with_context += "\n\nYour calendar is currently empty."
 
     memories = load_memory()
     memory_context = ""
     if memories:
         memory_context = "\n\nRelevant memories:\n" + "\n".join(memories[-10:])
 
-    current_time = time.strftime('%A, %B %d, %Y %I:%M %p', time.gmtime())
-la_offset = -7
-import datetime
-la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=la_offset)
-la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
-user_message_with_context = f"[Current date and time in Los Angeles: {la_time_str}]\n\n" + user_message_with_context
-messages = conversation_history + [{"role": "user", "content": user_message_with_context}]
+    messages = conversation_history + [{"role": "user", "content": user_message_with_context}]
 
     response = client.messages.create(
         model="claude-sonnet-4-5",
@@ -477,8 +496,11 @@ messages = conversation_history + [{"role": "user", "content": user_message_with
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
     if calendar_results:
         created = [e for e in calendar_results if e['success']]
+        failed_cal = [e for e in calendar_results if not e['success']]
         if created:
             result['event_created'] = f"📅 Event created: {created[0]['title']}"
+        if failed_cal:
+            result['event_error'] = f"📅 Event failed: {failed_cal[0]['link']}"
 
     return jsonify(result)
 
