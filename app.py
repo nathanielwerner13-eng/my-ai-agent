@@ -3,10 +3,13 @@ from flask_cors import CORS
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from duckduckgo_search import DDGS
-import resend
 import os
 import json
 import re
+import base64
+from email.mime.text import MIMEText
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
 load_dotenv()
 
@@ -25,7 +28,7 @@ You have a warm, professional personality like a trusted personal assistant.
 Your name Bina (בינה) means intelligence and wisdom in Hebrew.
 
 EMAIL CAPABILITY:
-You can send emails on behalf of Nathaniel Werner.
+You can send emails on behalf of Nathaniel Werner from nathanielwerner13@gmail.com.
 When asked to send or write an email, respond in this EXACT format:
 
 SEND_EMAIL
@@ -38,33 +41,35 @@ Always write professional, personalized emails. Sign off as Nathaniel Werner.
 If the user doesn't provide an email address, ask for it before drafting.
 After sending confirm with a friendly message."""
 
-def search_web(query):
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=3))
-            if results:
-                summary = "Web search results for: " + query + "\n"
-                for r in results:
-                    summary += "- " + r['title'] + ": " + r['body'][:200] + "\n"
-                return summary
-    except:
-        pass
-    return ""
+def get_gmail_service():
+    creds = Credentials(
+        token=None,
+        refresh_token=os.environ.get("GOOGLE_REFRESH_TOKEN"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.environ.get("GOOGLE_CLIENT_ID"),
+        client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
+        scopes=["https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.modify"]
+    )
+    return build("gmail", "v1", credentials=creds)
 
 def send_email(to_email, subject, body):
     try:
-        resend.api_key = os.environ.get("RESEND_API_KEY")
-        params = {
-            "from": "Nathaniel Werner <onboarding@resend.dev>",
-            "to": [to_email],
-            "subject": subject,
-            "text": body,
-        }
-        email = resend.Emails.send(params)
-        print(f"Email sent via Resend to {to_email} | ID: {email['id']}")
+        service = get_gmail_service()
+        message = MIMEText(body)
+        message["to"] = to_email
+        message["from"] = "nathanielwerner13@gmail.com"
+        message["subject"] = subject
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        service.users().messages().send(
+            userId="me",
+            body={"raw": raw}
+        ).execute()
+        print(f"Email sent via Gmail API to {to_email}")
         return True
     except Exception as e:
-        print(f"Resend error: {e}")
+        print(f"Gmail API error: {e}")
         return False
 
 def parse_and_send_email(text):
@@ -91,6 +96,19 @@ def clean_response(text):
         return (before + "\n\n" + after).strip()
     return text
 
+def search_web(query):
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=3))
+            if results:
+                summary = "Web search results for: " + query + "\n"
+                for r in results:
+                    summary += "- " + r['title'] + ": " + r['body'][:200] + "\n"
+                return summary
+    except:
+        pass
+    return ""
+
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         with open(MEMORY_FILE, 'r') as f:
@@ -104,6 +122,10 @@ def save_memory(history):
 @app.route('/')
 def home():
     return send_from_directory('.', 'index.html')
+
+@app.route('/manifest.json')
+def manifest():
+    return send_from_directory('.', 'manifest.json')
 
 @app.route('/chat', methods=['POST'])
 def chat():
