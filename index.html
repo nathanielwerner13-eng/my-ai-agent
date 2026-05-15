@@ -81,6 +81,15 @@
         }
         .msg.typing { color: #444; font-size: 20px; letter-spacing: 4px; }
 
+        /* EMAIL STATUS */
+        .email-status {
+            font-size: 11px; padding: 6px 12px;
+            border-radius: 20px; align-self: flex-start;
+            margin-top: -6px;
+        }
+        .email-status.sent { color: #00cc66; background: #001a0d; border: 1px solid #004d1f; }
+        .email-status.failed { color: #ff4444; background: #1a0000; border: 1px solid #4d0000; }
+
         /* QUICK ACTIONS */
         #quick {
             flex-shrink: 0; padding: 8px 14px;
@@ -133,7 +142,6 @@
             flex-shrink: 0;
         }
 
-        /* SCROLLBAR */
         #chat::-webkit-scrollbar { width: 2px; }
         #chat::-webkit-scrollbar-track { background: transparent; }
         #chat::-webkit-scrollbar-thumb { background: #1a1a1a; }
@@ -181,25 +189,35 @@
     <div class="footer-hebrew">ב • י • נ • ה</div>
 
     <script>
-        const PASSPHRASE = "bina2024";
-
-        function unlock() {
-            const val = document.getElementById('pin').value;
-            if (val === PASSPHRASE) {
-                document.getElementById('lock').classList.add('hidden');
-                sessionStorage.setItem('unlocked', '1');
-            } else {
-                document.getElementById('lock-err').textContent = 'incorrect passphrase';
-                document.getElementById('pin').value = '';
-            }
+        // Check if already unlocked this session
+        if (sessionStorage.getItem('unlocked') === '1') {
+            document.getElementById('lock').classList.add('hidden');
         }
 
         document.getElementById('pin').addEventListener('keypress', e => {
             if (e.key === 'Enter') unlock();
         });
 
-        if (sessionStorage.getItem('unlocked') === '1') {
-            document.getElementById('lock').classList.add('hidden');
+        async function unlock() {
+            const val = document.getElementById('pin').value;
+            try {
+                const r = await fetch('/verify-passphrase', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    credentials: 'include',
+                    body: JSON.stringify({passphrase: val})
+                });
+                const d = await r.json();
+                if (d.success) {
+                    document.getElementById('lock').classList.add('hidden');
+                    sessionStorage.setItem('unlocked', '1');
+                } else {
+                    document.getElementById('lock-err').textContent = 'incorrect passphrase';
+                    document.getElementById('pin').value = '';
+                }
+            } catch(e) {
+                document.getElementById('lock-err').textContent = 'connection error';
+            }
         }
 
         function autoResize(el) {
@@ -230,6 +248,17 @@
             return div;
         }
 
+        function addEmailStatus(text, success) {
+            const chat = document.getElementById('chat');
+            const div = document.createElement('div');
+            div.className = 'email-status ' + (success ? 'sent' : 'failed');
+            div.textContent = text;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        let history = [];
+
         async function send() {
             const input = document.getElementById('input');
             const msg = input.value.trim();
@@ -238,19 +267,43 @@
             input.style.height = 'auto';
             addMsg(msg, 'user');
             const typing = addMsg('···', 'agent typing');
+
             try {
                 const r = await fetch('/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message: msg})
+                    credentials: 'include',
+                    body: JSON.stringify({message: msg, history: history})
                 });
+
+                if (r.status === 401) {
+                    typing.className = 'msg agent';
+                    typing.textContent = 'Session expired. Please refresh and log in again.';
+                    sessionStorage.removeItem('unlocked');
+                    setTimeout(() => location.reload(), 2000);
+                    return;
+                }
+
                 const d = await r.json();
                 typing.className = 'msg agent';
                 typing.innerHTML = d.response.replace(/\n/g, '<br>');
+
+                // Show email status
+                if (d.email_sent) addEmailStatus(d.email_sent, true);
+                if (d.email_error) addEmailStatus(d.email_error, false);
+
+                // Update history
+                history.push({role: 'user', content: msg});
+                history.push({role: 'assistant', content: d.response});
+
+                // Keep history to last 20 messages
+                if (history.length > 20) history = history.slice(-20);
+
             } catch(e) {
                 typing.className = 'msg agent';
                 typing.textContent = 'Connection error. Try again.';
             }
+
             document.getElementById('chat').scrollTop = 99999;
         }
 
