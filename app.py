@@ -3,6 +3,8 @@ from flask_cors import CORS
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from ddgs import DDGS
+from twilio.rest import Client as TwilioClient
+from twilio.twig.messaging_response import MessagingResponse
 import os
 import json
 
@@ -11,15 +13,18 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 client = Anthropic()
+twilio_client = TwilioClient(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
 
 conversation_history = []
+whatsapp_history = []
 MEMORY_FILE = "memory.json"
 
-SYSTEM_PROMPT = """You are Alfred, a personal AI assistant and autonomous agent.
+SYSTEM_PROMPT = """You are Bina, a personal AI assistant and autonomous agent.
 You are proactive, organized, and remember context throughout conversations.
-You have access to web search. When asked about current events, news, prices, 
+You have access to web search. When asked about current events, news, prices,
 or anything requiring up-to-date information, use the search results provided.
-You have a warm, professional personality like a trusted personal assistant."""
+You have a warm, professional personality like a trusted personal assistant.
+Your name Bina (בינה) means intelligence and wisdom in Hebrew."""
 
 def search_web(query):
     try:
@@ -53,10 +58,10 @@ def chat():
     global conversation_history
     data = request.json
     user_message = data.get('message', '')
-    
+
     search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
     should_search = any(k in user_message.lower() for k in search_keywords)
-    
+
     enhanced_message = user_message
     if should_search:
         search_results = search_web(user_message)
@@ -74,6 +79,34 @@ def chat():
     conversation_history.append({"role": "assistant", "content": assistant_message})
     save_memory(conversation_history)
     return jsonify({"response": assistant_message})
+
+@app.route('/whatsapp', methods=['POST'])
+def whatsapp():
+    global whatsapp_history
+    incoming_msg = request.values.get('Body', '').strip()
+    
+    search_keywords = ['latest', 'news', 'today', 'current', 'price', 'weather', 'who is', 'what is', 'when is', 'search']
+    should_search = any(k in incoming_msg.lower() for k in search_keywords)
+
+    enhanced_message = incoming_msg
+    if should_search:
+        search_results = search_web(incoming_msg)
+        if search_results:
+            enhanced_message = incoming_msg + "\n\n[SEARCH RESULTS]\n" + search_results
+
+    whatsapp_history.append({"role": "user", "content": enhanced_message})
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=1000,
+        system=SYSTEM_PROMPT,
+        messages=whatsapp_history
+    )
+    reply = response.content[0].text
+    whatsapp_history.append({"role": "assistant", "content": reply})
+
+    resp = MessagingResponse()
+    resp.message(reply)
+    return str(resp)
 
 @app.route('/history', methods=['GET'])
 def get_history():
