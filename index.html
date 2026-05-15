@@ -2,165 +2,293 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Bina">
+    <meta name="theme-color" content="#000000">
     <title>Bina</title>
+    <link rel="manifest" href="/manifest.json">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         html, body {
             height: 100%;
-            background-color: #000;
+            background: #000;
             color: #fff;
             font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+            overflow: hidden;
         }
-        body {
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
+        body { display: flex; flex-direction: column; height: 100dvh; }
+
+        /* LOCK SCREEN */
+        #lock {
+            position: fixed; inset: 0; background: #000;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 100; gap: 32px;
         }
+        #lock.hidden { display: none; }
+        .lock-logo { font-size: 32px; font-weight: 300; letter-spacing: 10px; color: #fff; }
+        .lock-hebrew { font-size: 11px; color: #444; letter-spacing: 6px; }
+        .lock-input {
+            background: #0d0d0d; border: 1px solid #222;
+            color: #fff; padding: 14px 20px; font-size: 16px;
+            width: 260px; text-align: center; outline: none;
+            font-family: inherit; letter-spacing: 4px;
+        }
+        .lock-btn {
+            background: #fff; color: #000; border: none;
+            padding: 14px 40px; font-size: 12px;
+            letter-spacing: 3px; text-transform: uppercase;
+            cursor: pointer; font-family: inherit; width: 260px;
+        }
+        .lock-error { color: #ff4444; font-size: 12px; letter-spacing: 2px; height: 16px; }
+
+        /* HEADER */
         header {
-            padding: 30px 0 15px 0;
-            text-align: center;
-            border-bottom: 1px solid #1a1a1a;
-            flex-shrink: 0;
+            flex-shrink: 0; padding: env(safe-area-inset-top, 44px) 0 12px;
+            text-align: center; border-bottom: 1px solid #111;
         }
-        .hebrew-accent {
-            font-size: 11px;
-            color: #444;
-            letter-spacing: 6px;
-            margin-bottom: 10px;
-        }
-        .logo {
-            font-size: 28px;
-            font-weight: 300;
-            letter-spacing: 8px;
-            color: #fff;
-        }
-        .star { font-size: 12px; color: #555; margin: 0 8px; }
-        .tagline {
-            font-size: 10px;
-            color: #444;
-            letter-spacing: 4px;
-            margin-top: 8px;
-            text-transform: uppercase;
-        }
+        .hebrew-accent { font-size: 9px; color: #444; letter-spacing: 6px; margin-bottom: 6px; }
+        .logo { font-size: 24px; font-weight: 300; letter-spacing: 8px; color: #fff; }
+        .star { font-size: 10px; color: #555; margin: 0 7px; }
+        .tagline { font-size: 9px; color: #444; letter-spacing: 4px; margin-top: 5px; }
+
+        /* CHAT */
         #chat {
-            flex: 1;
-            overflow-y: auto;
-            padding: 24px 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
-            max-width: 700px;
-            width: 100%;
-            margin: 0 auto;
+            flex: 1; overflow-y: auto; padding: 16px 14px;
+            display: flex; flex-direction: column; gap: 12px;
+            -webkit-overflow-scrolling: touch;
         }
         .msg {
-            max-width: 78%;
-            padding: 12px 16px;
-            font-size: 14px;
-            line-height: 1.6;
+            max-width: 82%; padding: 10px 14px;
+            font-size: 14px; line-height: 1.6;
         }
         .msg.user {
-            background: #111;
-            border: 1px solid #222;
-            align-self: flex-end;
-            color: #eee;
+            background: #111; border: 1px solid #222;
+            align-self: flex-end; color: #eee;
+            border-radius: 16px 16px 4px 16px;
         }
         .msg.agent {
-            background: #0a0a0a;
-            border-left: 1px solid #2a2a2a;
-            align-self: flex-start;
-            color: #bbb;
+            background: #0a0a0a; border-left: 2px solid #222;
+            align-self: flex-start; color: #bbb;
+            border-radius: 0 16px 16px 16px;
         }
         .msg.agent::before {
             content: "בינה";
-            display: block;
-            font-size: 9px;
-            color: #444;
-            letter-spacing: 3px;
-            margin-bottom: 6px;
+            display: block; font-size: 8px;
+            color: #444; letter-spacing: 3px; margin-bottom: 5px;
         }
+        .msg.typing { color: #444; font-size: 20px; letter-spacing: 4px; }
+
+        /* QUICK ACTIONS */
+        #quick {
+            flex-shrink: 0; padding: 8px 14px;
+            display: flex; gap: 8px; overflow-x: auto;
+            scrollbar-width: none; border-top: 1px solid #0d0d0d;
+        }
+        #quick::-webkit-scrollbar { display: none; }
+        .qa {
+            background: #0d0d0d; border: 1px solid #1a1a1a;
+            color: #666; font-size: 11px; padding: 7px 14px;
+            border-radius: 20px; white-space: nowrap; cursor: pointer;
+            flex-shrink: 0; font-family: inherit;
+        }
+        .qa:active { background: #1a1a1a; color: #999; }
+
+        /* INPUT */
         #bottom {
-            flex-shrink: 0;
-            padding: 14px 20px 24px 20px;
+            flex-shrink: 0; padding: 10px 14px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
             border-top: 1px solid #111;
-            display: flex;
-            gap: 10px;
-            max-width: 700px;
-            width: 100%;
-            margin: 0 auto;
+            display: flex; gap: 8px; align-items: flex-end;
         }
+        #mic {
+            width: 42px; height: 42px; flex-shrink: 0;
+            background: #0d0d0d; border: 1px solid #1f1f1f;
+            border-radius: 50%; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; color: #555;
+        }
+        #mic.listening { border-color: #ff4444; color: #ff4444; background: #1a0000; }
         #input {
-            flex: 1;
-            background: #0d0d0d;
-            border: 1px solid #1f1f1f;
-            color: #fff;
-            padding: 12px 16px;
-            font-size: 14px;
-            outline: none;
-            font-family: inherit;
+            flex: 1; background: #0d0d0d; border: 1px solid #1f1f1f;
+            color: #fff; padding: 11px 16px; font-size: 16px;
+            outline: none; font-family: inherit; border-radius: 22px;
+            resize: none; max-height: 100px; line-height: 1.4;
         }
         #input::placeholder { color: #333; }
         #send {
-            background: #fff;
-            color: #000;
-            border: none;
-            padding: 12px 22px;
-            font-size: 12px;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            cursor: pointer;
-            font-family: inherit;
+            width: 42px; height: 42px; flex-shrink: 0;
+            background: #fff; color: #000; border: none;
+            border-radius: 50%; cursor: pointer;
+            font-size: 18px; font-weight: 700; display: flex;
+            align-items: center; justify-content: center;
         }
-        #send:hover { background: #ddd; }
+        #send:active { background: #ddd; }
+
         .footer-hebrew {
-            text-align: center;
-            font-size: 10px;
-            color: #1a1a1a;
-            letter-spacing: 4px;
-            padding: 6px 0;
+            text-align: center; font-size: 9px;
+            color: #111; letter-spacing: 4px; padding: 4px 0;
             flex-shrink: 0;
         }
+
+        /* SCROLLBAR */
+        #chat::-webkit-scrollbar { width: 2px; }
+        #chat::-webkit-scrollbar-track { background: transparent; }
+        #chat::-webkit-scrollbar-thumb { background: #1a1a1a; }
     </style>
 </head>
 <body>
+
+    <!-- LOCK SCREEN -->
+    <div id="lock">
+        <div class="lock-hebrew">מערכת בינה מלאכותית</div>
+        <div class="lock-logo">✡ BINA ✡</div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+            <input class="lock-input" type="password" id="pin" placeholder="Enter passphrase" />
+            <div class="lock-error" id="lock-err"></div>
+            <button class="lock-btn" onclick="unlock()">Enter</button>
+        </div>
+    </div>
+
+    <!-- MAIN APP -->
     <header>
         <div class="hebrew-accent">מערכת בינה מלאכותית</div>
         <div class="logo"><span class="star">✡</span>BINA<span class="star">✡</span></div>
-        <div class="tagline">Always Working. Never Sleeping.</div>
+        <div class="tagline">ALWAYS WORKING. NEVER SLEEPING.</div>
     </header>
 
     <div id="chat">
         <div class="msg agent">Shalom. I am Bina, your personal AI agent. How may I assist you today?</div>
     </div>
 
+    <div id="quick">
+        <button class="qa" onclick="quickSend('Send an email')">📧 Email</button>
+        <button class="qa" onclick="quickSend('Search the web for ')">🔍 Search</button>
+        <button class="qa" onclick="quickSend('What is on my schedule today?')">📅 Schedule</button>
+        <button class="qa" onclick="quickSend('Give me a quick business idea I can act on today')">💡 Ideas</button>
+        <button class="qa" onclick="quickSend('What should I be focused on right now?')">🎯 Focus</button>
+        <button class="qa" onclick="quickSend('Latest news and what matters to me')">📰 News</button>
+    </div>
+
     <div id="bottom">
-        <input id="input" type="text" placeholder="Message Bina..." />
-        <button id="send" onclick="send()">Send</button>
+        <button id="mic" onclick="toggleMic()" title="Voice input">🎤</button>
+        <textarea id="input" placeholder="Message Bina..." rows="1" oninput="autoResize(this)"></textarea>
+        <button id="send" onclick="send()">↑</button>
     </div>
 
     <div class="footer-hebrew">ב • י • נ • ה</div>
 
     <script>
-        document.getElementById("input").addEventListener("keypress", function(e) {
-            if (e.key === "Enter") send();
-        });
-        async function send() {
-            var msg = document.getElementById("input").value;
-            if (!msg) return;
-            var chat = document.getElementById("chat");
-            chat.innerHTML += "<div class='msg user'>" + msg + "</div>";
-            document.getElementById("input").value = "";
-            chat.innerHTML += "<div class='msg agent' id='typing'>...</div>";
-            chat.scrollTop = chat.scrollHeight;
-            try {
-                var r = await fetch("/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: msg})});
-                var d = await r.json();
-                document.getElementById("typing").outerHTML = "<div class='msg agent'>" + d.response + "</div>";
-            } catch(e) {
-                document.getElementById("typing").outerHTML = "<div class='msg agent'>Connection error.</div>";
+        const PASSPHRASE = "bina2024";
+
+        function unlock() {
+            const val = document.getElementById('pin').value;
+            if (val === PASSPHRASE) {
+                document.getElementById('lock').classList.add('hidden');
+                sessionStorage.setItem('unlocked', '1');
+            } else {
+                document.getElementById('lock-err').textContent = 'incorrect passphrase';
+                document.getElementById('pin').value = '';
             }
+        }
+
+        document.getElementById('pin').addEventListener('keypress', e => {
+            if (e.key === 'Enter') unlock();
+        });
+
+        if (sessionStorage.getItem('unlocked') === '1') {
+            document.getElementById('lock').classList.add('hidden');
+        }
+
+        function autoResize(el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 100) + 'px';
+        }
+
+        document.getElementById('input').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                send();
+            }
+        });
+
+        function quickSend(text) {
+            document.getElementById('input').value = text;
+            if (!text.endsWith(' ')) send();
+            else document.getElementById('input').focus();
+        }
+
+        function addMsg(text, role) {
+            const chat = document.getElementById('chat');
+            const div = document.createElement('div');
+            div.className = 'msg ' + role;
+            div.innerHTML = text.replace(/\n/g, '<br>');
+            chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
+            return div;
+        }
+
+        async function send() {
+            const input = document.getElementById('input');
+            const msg = input.value.trim();
+            if (!msg) return;
+            input.value = '';
+            input.style.height = 'auto';
+            addMsg(msg, 'user');
+            const typing = addMsg('···', 'agent typing');
+            try {
+                const r = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: msg})
+                });
+                const d = await r.json();
+                typing.className = 'msg agent';
+                typing.innerHTML = d.response.replace(/\n/g, '<br>');
+            } catch(e) {
+                typing.className = 'msg agent';
+                typing.textContent = 'Connection error. Try again.';
+            }
+            document.getElementById('chat').scrollTop = 99999;
+        }
+
+        // VOICE INPUT
+        let recognition = null;
+        function toggleMic() {
+            const mic = document.getElementById('mic');
+            if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+                addMsg('Voice input not supported on this browser. Use Safari on iPhone.', 'agent');
+                return;
+            }
+            if (recognition) {
+                recognition.stop();
+                recognition = null;
+                mic.classList.remove('listening');
+                return;
+            }
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SR();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+            recognition.onresult = e => {
+                document.getElementById('input').value = e.results[0][0].transcript;
+                mic.classList.remove('listening');
+                recognition = null;
+                send();
+            };
+            recognition.onerror = () => {
+                mic.classList.remove('listening');
+                recognition = null;
+            };
+            recognition.onend = () => {
+                mic.classList.remove('listening');
+                recognition = null;
+            };
+            recognition.start();
+            mic.classList.add('listening');
         }
     </script>
 </body>
