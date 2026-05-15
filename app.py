@@ -7,8 +7,9 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.messaging_response import MessagingResponse
 import os
 import json
-import sendgrid
-from sendgrid.helpers.mail import Mail
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import re
 
 load_dotenv()
@@ -60,16 +61,20 @@ def search_web(query):
 
 def send_email(to_email, subject, body):
     try:
-        sg = sendgrid.SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
-        from_email = "nathanielwerner13@gmail.com"  # Verified sender
-        message = Mail(
-            from_email=from_email,
-            to_emails=to_email,
-            subject=subject,
-            plain_text_content=body
-        )
-        response = sg.send(message)
-        print(f"Email sent! Status: {response.status_code}")
+        gmail_address = os.getenv("GMAIL_ADDRESS")
+        gmail_password = os.getenv("GMAIL_APP_PASSWORD")
+
+        msg = MIMEMultipart()
+        msg['From'] = f"Nathaniel Werner <{gmail_address}>"
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(gmail_address, gmail_password)
+            server.sendmail(gmail_address, to_email, msg.as_string())
+
+        print(f"Email sent via Gmail SMTP to {to_email}")
         return True
     except Exception as e:
         print(f"Email error: {e}")
@@ -82,7 +87,7 @@ def parse_and_send_email(text):
             to_match = re.search(r'TO:\s*(.+)', email_block)
             subject_match = re.search(r'SUBJECT:\s*(.+)', email_block)
             body_match = re.search(r'BODY:\s*([\s\S]+)', email_block)
-            
+
             if to_match and subject_match and body_match:
                 to_email = to_match.group(1).strip()
                 subject = subject_match.group(1).strip()
