@@ -4,7 +4,4 @@ anthropic
 python-dotenv
 duckduckgo_search
 gunicorn
-google-auth
-google-auth-oauthlib
-google-api-python-client
 requests
