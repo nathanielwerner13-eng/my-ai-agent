@@ -5,3 +5,4 @@ python-dotenv
 duckduckgo-search
 twilio
 resend
+gunicorn
