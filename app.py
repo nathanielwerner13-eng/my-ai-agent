@@ -7,7 +7,6 @@ import threading
 import time
 from urllib.parse import urlencode
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from flask import Flask, request, jsonify, session, redirect
 from flask_cors import CORS
 from anthropic import Anthropic
@@ -23,7 +22,7 @@ PASSPHRASE = 'bina2024'
 MEMORY_FILE = 'memory.json'
 NOTIFICATIONS_FILE = 'notifications.json'
 SEEN_EMAILS_FILE = 'seen_emails.json'
-GMAIL_SCOPES = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly'
+GMAIL_SCOPES = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar'
 REDIRECT_URI = 'https://my-ai-agent-production-5e17.up.railway.app/oauth/callback'
 
 SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner, an 18-year-old entrepreneur and college student in Beverly Hills.
@@ -34,6 +33,7 @@ You are proactive, intelligent, direct, and treat Nathaniel as a capable adult. 
 
 You can:
 - Send emails by outputting exactly: SEND_EMAIL|to@email.com|Subject Line|Body text here END_EMAIL
+- Create calendar events by outputting exactly: CREATE_EVENT|Title|2026-05-16T10:00:00|2026-05-16T11:00:00|Description END_EVENT
 - Search the web when needed for current information
 - Remember important information across conversations
 - Help with business strategy, investments, scheduling, research, and execution
@@ -69,7 +69,7 @@ def save_notifications(notifications):
 def add_notification(notif):
     notifications = load_notifications()
     notifications.insert(0, notif)
-    notifications = notifications[:50]  # keep last 50
+    notifications = notifications[:50]
     save_notifications(notifications)
 
 
@@ -102,7 +102,7 @@ def web_search(query):
         return f"Search error: {str(e)}"
 
 
-# ── Gmail ─────────────────────────────────────────────────────────────────────
+# ── Google Auth ───────────────────────────────────────────────────────────────
 
 def get_access_token():
     response = requests.post('https://oauth2.googleapis.com/token', data={
@@ -116,6 +116,9 @@ def get_access_token():
         raise Exception(f"Token refresh failed: {data}")
     return data['access_token']
 
+
+# ── Gmail ─────────────────────────────────────────────────────────────────────
+
 def send_email(to, subject, body):
     try:
         access_token = get_access_token()
@@ -126,10 +129,7 @@ def send_email(to, subject, body):
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         response = requests.post(
             'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
-            headers={
-                'Authorization': f'Bearer {access_token}',
-                'Content-Type': 'application/json'
-            },
+            headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'},
             json={'raw': raw}
         )
         if response.status_code == 200:
@@ -184,24 +184,122 @@ def draft_reply(email):
         response = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=500,
-            system="""You are Bina, drafting a reply on behalf of Nathaniel Werner, 18-year-old entrepreneur in Beverly Hills. 
-Write a concise, professional reply. Just write the reply body — no subject, no 'Dear', just the message text. Keep it short and natural.""",
-            messages=[{
-                "role": "user",
-                "content": f"Draft a reply to this email:\n\nFrom: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
-            }]
+            system="You are Bina, drafting a reply on behalf of Nathaniel Werner, 18-year-old entrepreneur in Beverly Hills. Write a concise, professional reply. Just write the reply body — no subject, no greeting header, just the message text.",
+            messages=[{"role": "user", "content": f"Draft a reply to this email:\n\nFrom: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"}]
         )
         return response.content[0].text
     except Exception as e:
         return f"Could not draft reply: {str(e)}"
 
 
-# ── Inbox Monitor (background thread) ────────────────────────────────────────
+# ── Google Calendar ───────────────────────────────────────────────────────────
+
+def get_upcoming_events(max_results=10):
+    try:
+        access_token = get_access_token()
+        now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        response = requests.get(
+            'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+            headers={'Authorization': f'Bearer {access_token}'},
+            params={
+                'timeMin': now,
+                'maxResults': max_results,
+                'singleEvents': True,
+                'orderBy': 'startTime'
+            }
+        )
+        data = response.json()
+        events = []
+        for item in data.get('items', []):
+            start = item['start'].get('dateTime', item['start'].get('date', ''))
+            end = item['end'].get('dateTime', item['end'].get('date', ''))
+            events.append({
+                'id': item['id'],
+                'title': item.get('summary', '(no title)'),
+                'start': start,
+                'end': end,
+                'description': item.get('description', '')
+            })
+        return events
+    except Exception as e:
+        print(f"Calendar error: {str(e)}")
+        return []
+
+def create_calendar_event(title, start, end, description=''):
+    try:
+        access_token = get_access_token()
+        event = {
+            'summary': title,
+            'description': description,
+            'start': {'dateTime': start, 'timeZone': 'America/Los_Angeles'},
+            'end': {'dateTime': end, 'timeZone': 'America/Los_Angeles'}
+        }
+        response = requests.post(
+            'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+            headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'},
+            json=event
+        )
+        if response.status_code in [200, 201]:
+            return True, response.json().get('htmlLink', '')
+        else:
+            return False, str(response.json())
+    except Exception as e:
+        return False, str(e)
+
+def process_calendar_commands(text):
+    pattern = r'CREATE_EVENT\|(.*?)\|(.*?)\|(.*?)\|(.*?)END_EVENT'
+    matches = re.findall(pattern, text, re.DOTALL)
+    results = []
+    for title, start, end, description in matches:
+        success, link = create_calendar_event(title.strip(), start.strip(), end.strip(), description.strip())
+        results.append({'title': title.strip(), 'success': success, 'link': link})
+    return results
+
+
+# ── Morning Briefing ──────────────────────────────────────────────────────────
+
+def generate_morning_briefing():
+    try:
+        events = get_upcoming_events(max_results=5)
+        emails = get_inbox_emails(max_results=3)
+        events_text = "\n".join([f"- {e['title']} at {e['start']}" for e in events]) or "No upcoming events"
+        emails_text = "\n".join([f"- From {e['from']}: {e['subject']}" for e in emails]) or "No unread emails"
+        response = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=400,
+            system="You are Bina, Nathaniel's AI chief of staff. Give a sharp, energizing morning briefing. Be concise and actionable.",
+            messages=[{"role": "user", "content": f"Generate a morning briefing.\n\nUpcoming events:\n{events_text}\n\nUnread emails:\n{emails_text}"}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        return f"Briefing error: {str(e)}"
+
+
+# ── Inbox Monitor ─────────────────────────────────────────────────────────────
 
 def monitor_inbox():
     print("Inbox monitor started")
+    last_briefing_day = -1
     while True:
         try:
+            # Morning briefing at 7am LA time
+            la_hour = (time.gmtime().tm_hour - 7) % 24
+            la_day = time.gmtime().tm_yday
+            if la_hour == 7 and la_day != last_briefing_day:
+                briefing = generate_morning_briefing()
+                add_notification({
+                    'id': f'briefing-{la_day}',
+                    'type': 'briefing',
+                    'subject': '☀️ Morning Briefing',
+                    'from': 'Bina',
+                    'body': briefing,
+                    'draft_reply': '',
+                    'read': False,
+                    'timestamp': time.time()
+                })
+                last_briefing_day = la_day
+
+            # Check inbox
             seen = load_seen_emails()
             emails = get_inbox_emails(max_results=10)
             for email in emails:
@@ -225,7 +323,7 @@ def monitor_inbox():
         time.sleep(60)
 
 
-# ── Email Commands ────────────────────────────────────────────────────────────
+# ── Email/Calendar Command Processing ────────────────────────────────────────
 
 def process_email_commands(text):
     pattern = r'SEND_EMAIL\|(.*?)\|(.*?)\|(.*?)END_EMAIL'
@@ -238,6 +336,7 @@ def process_email_commands(text):
 
 def clean_response(text):
     cleaned = re.sub(r'SEND_EMAIL\|.*?END_EMAIL', '', text, flags=re.DOTALL)
+    cleaned = re.sub(r'CREATE_EVENT\|.*?END_EVENT', '', cleaned, flags=re.DOTALL)
     return cleaned.strip()
 
 
@@ -290,14 +389,26 @@ def send_draft():
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': error})
 
+@app.route('/calendar', methods=['GET'])
+def get_calendar():
+    events = get_upcoming_events(max_results=10)
+    return jsonify({'events': events})
+
+@app.route('/calendar/create', methods=['POST'])
+def create_event():
+    data = request.json
+    success, link = create_calendar_event(
+        data.get('title'),
+        data.get('start'),
+        data.get('end'),
+        data.get('description', '')
+    )
+    return jsonify({'success': success, 'link': link})
+
 @app.route('/test-email')
 def test_email():
     token = os.environ.get('GOOGLE_REFRESH_TOKEN', 'NOT SET')
-    success, error = send_email(
-        'iirawgunzsii@gmail.com',
-        'Test from Bina',
-        'Hey! This is Bina testing email directly.'
-    )
+    success, error = send_email('iirawgunzsii@gmail.com', 'Test from Bina', 'Hey! This is Bina testing email directly.')
     if success:
         return f'<h2 style="color:green;font-family:monospace">✅ Email sent!</h2><p style="font-family:monospace">Token: {token[:30]}...</p>'
     else:
@@ -312,13 +423,20 @@ def chat():
     user_message = data.get('message', '')
     conversation_history = data.get('history', [])
 
-    search_triggers = ['search', 'look up', 'find', 'what is', 'who is',
-                       'latest', 'news', 'current', 'today', 'price', 'stock', 'weather']
+    search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news', 'current', 'today', 'price', 'stock', 'weather']
     if any(word in user_message.lower() for word in search_triggers):
         search_results = web_search(user_message)
         user_message_with_context = f"{user_message}\n\nSearch results:\n{search_results}"
     else:
         user_message_with_context = user_message
+
+    # Inject calendar context if scheduling related
+    calendar_triggers = ['schedule', 'calendar', 'event', 'meeting', 'appointment', 'tomorrow', 'next week', 'briefing']
+    if any(word in user_message.lower() for word in calendar_triggers):
+        events = get_upcoming_events(max_results=5)
+        if events:
+            events_text = "\n".join([f"- {e['title']} at {e['start']}" for e in events])
+            user_message_with_context += f"\n\nUpcoming calendar events:\n{events_text}"
 
     memories = load_memory()
     memory_context = ""
@@ -336,6 +454,7 @@ def chat():
 
     assistant_message = response.content[0].text
     email_results = process_email_commands(assistant_message)
+    calendar_results = process_calendar_commands(assistant_message)
     display_message = clean_response(assistant_message)
 
     if any(word in user_message.lower() for word in ['remember', 'save', 'note', 'important']):
@@ -350,6 +469,10 @@ def chat():
             result['email_sent'] = f"✅ Email sent to {sent[0]['to']}"
         if failed:
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
+    if calendar_results:
+        created = [e for e in calendar_results if e['success']]
+        if created:
+            result['event_created'] = f"📅 Event created: {created[0]['title']}"
 
     return jsonify(result)
 
@@ -373,12 +496,10 @@ def authorize():
 def oauth_callback():
     code = request.args.get('code')
     error = request.args.get('error')
-
     if error:
         return f'<h2 style="color:red">Error: {error}</h2>', 400
     if not code:
         return '<h2 style="color:red">Error: no code returned</h2>', 400
-
     token_response = requests.post('https://oauth2.googleapis.com/token', data={
         'code': code,
         'client_id': os.environ.get('GOOGLE_CLIENT_ID'),
@@ -386,36 +507,28 @@ def oauth_callback():
         'redirect_uri': REDIRECT_URI,
         'grant_type': 'authorization_code'
     })
-
     tokens = token_response.json()
     refresh_token = tokens.get('refresh_token', '')
-
     if not refresh_token:
-        note = "⚠️ No refresh token. Go to https://myaccount.google.com/permissions, revoke access, then try /authorize again."
+        note = "⚠️ No refresh token. Revoke access at myaccount.google.com/permissions then try again."
     else:
-        note = "✅ Copy the token above and set it as GOOGLE_REFRESH_TOKEN in Railway."
-
+        note = "✅ Copy the token and set it as GOOGLE_REFRESH_TOKEN in Railway."
     return f"""
-    <html>
-    <body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
+    <html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
     <h2>OAuth Callback</h2>
     <p><b>Refresh Token:</b></p>
     <textarea style="width:100%;height:80px;background:#111;color:#0f0;font-size:13px;padding:8px;">{refresh_token}</textarea>
-    <br><br>
-    <p>{note}</p>
-    <br>
+    <br><br><p>{note}</p>
     <p><b>Full response:</b></p>
     <pre style="background:#111;padding:10px;color:#ff0;">{json.dumps(tokens, indent=2)}</pre>
-    </body>
-    </html>
+    </body></html>
     """
 
 
-# ── Start inbox monitor thread ────────────────────────────────────────────────
+# ── Start monitor thread ──────────────────────────────────────────────────────
 
 monitor_thread = threading.Thread(target=monitor_inbox, daemon=True)
 monitor_thread.start()
-
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
