@@ -129,6 +129,19 @@ def verify_passphrase():
         return jsonify({'success': True})
     return jsonify({'success': False}), 401
 
+@app.route('/test-email')
+def test_email():
+    token = os.environ.get('GOOGLE_REFRESH_TOKEN', 'NOT SET')
+    success, error = send_email(
+        'iirawgunzsii@gmail.com',
+        'Test from Bina',
+        'Hey! This is Bina testing email directly.'
+    )
+    if success:
+        return f'<h2 style="color:green;font-family:monospace">✅ Email sent successfully!</h2><p style="font-family:monospace">Token used: {token[:20]}...</p>'
+    else:
+        return f'<h2 style="color:red;font-family:monospace">❌ Failed: {error}</h2><p style="font-family:monospace">Token used: {token[:20]}...</p>'
+
 @app.route('/chat', methods=['POST'])
 def chat():
     if not session.get('authenticated'):
@@ -138,7 +151,6 @@ def chat():
     user_message = data.get('message', '')
     conversation_history = data.get('history', [])
 
-    # Auto web search triggers
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is',
                        'latest', 'news', 'current', 'today', 'price', 'stock', 'weather']
     if any(word in user_message.lower() for word in search_triggers):
@@ -147,7 +159,6 @@ def chat():
     else:
         user_message_with_context = user_message
 
-    # Load memory context
     memories = load_memory()
     memory_context = ""
     if memories:
@@ -166,7 +177,6 @@ def chat():
     email_results = process_email_commands(assistant_message)
     display_message = clean_response(assistant_message)
 
-    # Auto-save to memory
     if any(word in user_message.lower() for word in ['remember', 'save', 'note', 'important']):
         memories.append(f"User said: {user_message}")
         save_memory(memories)
