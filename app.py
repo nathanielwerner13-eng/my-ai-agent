@@ -6,10 +6,9 @@ from duckduckgo_search import DDGS
 import os
 import json
 import re
-import base64
+import smtplib
 from email.mime.text import MIMEText
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
@@ -41,35 +40,40 @@ Always write professional, personalized emails. Sign off as Nathaniel Werner.
 If the user doesn't provide an email address, ask for it before drafting.
 After sending confirm with a friendly message."""
 
-def get_gmail_service():
-    creds = Credentials(
-        token=None,
-        refresh_token=os.environ.get("GOOGLE_REFRESH_TOKEN"),
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.environ.get("GOOGLE_CLIENT_ID"),
-        client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
-        scopes=["https://www.googleapis.com/auth/gmail.send",
-                "https://www.googleapis.com/auth/gmail.readonly",
-                "https://www.googleapis.com/auth/gmail.modify"]
-    )
-    return build("gmail", "v1", credentials=creds)
+def search_web(query):
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=3))
+            if results:
+                summary = "Web search results for: " + query + "\n"
+                for r in results:
+                    summary += "- " + r['title'] + ": " + r['body'][:200] + "\n"
+                return summary
+    except:
+        pass
+    return ""
 
 def send_email(to_email, subject, body):
     try:
-        service = get_gmail_service()
-        message = MIMEText(body)
-        message["to"] = to_email
-        message["from"] = "nathanielwerner13@gmail.com"
-        message["subject"] = subject
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        service.users().messages().send(
-            userId="me",
-            body={"raw": raw}
-        ).execute()
-        print(f"Email sent via Gmail API to {to_email}")
+        gmail_address = os.environ.get("GMAIL_ADDRESS")
+        gmail_password = os.environ.get("GMAIL_APP_PASSWORD")
+
+        msg = MIMEMultipart()
+        msg['From'] = f"Nathaniel Werner <{gmail_address}>"
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(gmail_address, gmail_password)
+            server.sendmail(gmail_address, to_email, msg.as_string())
+
+        print(f"Email sent via SMTP to {to_email}")
         return True
     except Exception as e:
-        print(f"Gmail API error: {e}")
+        print(f"SMTP error: {e}")
         return False
 
 def parse_and_send_email(text):
@@ -95,19 +99,6 @@ def clean_response(text):
         after = text.split('END_EMAIL')[-1].strip()
         return (before + "\n\n" + after).strip()
     return text
-
-def search_web(query):
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=3))
-            if results:
-                summary = "Web search results for: " + query + "\n"
-                for r in results:
-                    summary += "- " + r['title'] + ": " + r['body'][:200] + "\n"
-                return summary
-    except:
-        pass
-    return ""
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
