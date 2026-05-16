@@ -29,7 +29,7 @@
         .tagline { font-size: 9px; color: #444; letter-spacing: 4px; margin-top: 5px; }
 
         #notif-btn { position: absolute; top: env(safe-area-inset-top, 44px); right: 16px; background: none; border: none; font-size: 20px; cursor: pointer; color: #555; padding: 8px; }
-        #notif-badge { position: absolute; top: -2px; right: -2px; background: #ff4444; color: #fff; font-size: 9px; border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; display: none; }
+        #notif-badge { position: absolute; top: -2px; right: -2px; background: #ff4444; color: #fff; font-size: 9px; border-radius: 50%; width: 16px; height: 16px; display: none; align-items: center; justify-content: center; }
 
         #notif-panel { position: fixed; inset: 0; background: #000; z-index: 50; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.3s ease; }
         #notif-panel.open { transform: translateX(0); }
@@ -44,7 +44,7 @@
         .notif-body { font-size: 12px; color: #555; margin-bottom: 12px; line-height: 1.5; }
         .notif-draft { background: #0d1a0d; border: 1px solid #1a3a1a; padding: 10px; border-radius: 6px; font-size: 12px; color: #0f0; line-height: 1.5; margin-bottom: 10px; }
         .notif-draft-label { font-size: 10px; color: #444; letter-spacing: 2px; margin-bottom: 6px; }
-        .notif-actions { display: flex; gap: 8px; }
+        .notif-actions { display: flex; gap: 8px; flex-wrap: wrap; }
         .btn-send { background: #00cc66; color: #000; border: none; padding: 8px 16px; font-size: 11px; border-radius: 20px; cursor: pointer; font-family: inherit; letter-spacing: 1px; }
         .btn-edit { background: #111; color: #666; border: 1px solid #222; padding: 8px 16px; font-size: 11px; border-radius: 20px; cursor: pointer; font-family: inherit; }
         .btn-dismiss { background: none; color: #333; border: none; padding: 8px 16px; font-size: 11px; cursor: pointer; font-family: inherit; }
@@ -59,6 +59,7 @@
         .email-status { font-size: 11px; padding: 6px 12px; border-radius: 20px; align-self: flex-start; margin-top: -6px; }
         .email-status.sent { color: #00cc66; background: #001a0d; border: 1px solid #004d1f; }
         .email-status.failed { color: #ff4444; background: #1a0000; border: 1px solid #4d0000; }
+        .event-status { font-size: 11px; padding: 6px 12px; border-radius: 20px; align-self: flex-start; margin-top: -6px; color: #6699ff; background: #000d1a; border: 1px solid #003366; }
 
         #quick { flex-shrink: 0; padding: 8px 14px; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; border-top: 1px solid #0d0d0d; }
         #quick::-webkit-scrollbar { display: none; }
@@ -102,8 +103,7 @@
     <div class="logo"><span class="star">✡</span>BINA<span class="star">✡</span></div>
     <div class="tagline">ALWAYS WORKING. NEVER SLEEPING.</div>
     <button id="notif-btn" onclick="openNotifs()">
-        🔔
-        <span id="notif-badge"></span>
+        🔔<span id="notif-badge"></span>
     </button>
 </header>
 
@@ -131,7 +131,7 @@
 <script>
     if (sessionStorage.getItem('unlocked') === '1') {
         document.getElementById('lock').classList.add('hidden');
-        startPolling();
+        startApp();
     }
 
     document.getElementById('pin').addEventListener('keypress', e => {
@@ -151,7 +151,7 @@
             if (d.success) {
                 document.getElementById('lock').classList.add('hidden');
                 sessionStorage.setItem('unlocked', '1');
-                startPolling();
+                startApp();
             } else {
                 document.getElementById('lock-err').textContent = 'incorrect passphrase';
                 document.getElementById('pin').value = '';
@@ -159,6 +159,46 @@
         } catch(e) {
             document.getElementById('lock-err').textContent = 'connection error';
         }
+    }
+
+    function startApp() {
+        registerPush();
+        startPolling();
+    }
+
+    // ── Push Notifications ─────────────────────────────────────────────────
+
+    async function registerPush() {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+        try {
+            const reg = await navigator.serviceWorker.register('/sw.js');
+            const permission = await Notification.requestPermission();
+            if (permission !== 'granted') return;
+            const keyRes = await fetch('/vapid-public-key');
+            const keyData = await keyRes.json();
+            const sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(keyData.key)
+            });
+            await fetch('/subscribe', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                credentials: 'include',
+                body: JSON.stringify(sub)
+            });
+            console.log('Push registered');
+        } catch(e) {
+            console.log('Push registration failed:', e);
+        }
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = window.atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+        return outputArray;
     }
 
     // ── Notifications ──────────────────────────────────────────────────────
@@ -206,24 +246,28 @@
                 <div class="notif-from">${n.from}</div>
                 <div class="notif-subject">${n.subject}</div>
                 <div class="notif-body">${n.body}</div>
+                ${n.draft_reply ? `
                 <div class="notif-draft-label">BINA'S DRAFT REPLY</div>
-                <div class="notif-draft" id="draft-${n.id}">${n.draft_reply}</div>
+                <div class="notif-draft" id="draft-${n.id}" contenteditable="false">${n.draft_reply}</div>
                 <div class="notif-actions">
                     <button class="btn-send" onclick="sendDraft('${n.id}', '${escapeAttr(n.from)}', '${escapeAttr(n.subject)}')">✓ Send Reply</button>
                     <button class="btn-edit" onclick="editDraft('${n.id}')">✎ Edit</button>
                     <button class="btn-dismiss" onclick="dismissNotif('${n.id}')">Dismiss</button>
-                </div>
+                </div>` : `
+                <div class="notif-actions">
+                    <button class="btn-dismiss" onclick="dismissNotif('${n.id}')">Dismiss</button>
+                </div>`}
             </div>
         `).join('');
     }
 
     function escapeAttr(str) {
-        return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, ' ');
     }
 
     async function sendDraft(id, from, subject) {
         const draftEl = document.getElementById(`draft-${id}`);
-        const body = draftEl.textContent;
+        const body = draftEl.innerText;
         const toMatch = from.match(/<(.+)>/) || [null, from];
         const to = toMatch[1];
         const r = await fetch('/send-draft', {
@@ -236,6 +280,7 @@
         if (d.success) {
             document.getElementById(`notif-${id}`).style.opacity = '0.3';
             await markRead(id);
+            pollNotifications();
         }
     }
 
@@ -253,10 +298,7 @@
     }
 
     async function markRead(id) {
-        await fetch(`/notifications/read/${id}`, {
-            method: 'POST',
-            credentials: 'include'
-        });
+        await fetch(`/notifications/read/${id}`, {method: 'POST', credentials: 'include'});
     }
 
     // ── Chat ───────────────────────────────────────────────────────────────
@@ -286,10 +328,10 @@
         return div;
     }
 
-    function addEmailStatus(text, success) {
+    function addStatus(text, type) {
         const chat = document.getElementById('chat');
         const div = document.createElement('div');
-        div.className = 'email-status ' + (success ? 'sent' : 'failed');
+        div.className = type;
         div.textContent = text;
         chat.appendChild(div);
         chat.scrollTop = chat.scrollHeight;
@@ -322,8 +364,9 @@
             const d = await r.json();
             typing.className = 'msg agent';
             typing.innerHTML = d.response.replace(/\n/g, '<br>');
-            if (d.email_sent) addEmailStatus(d.email_sent, true);
-            if (d.email_error) addEmailStatus(d.email_error, false);
+            if (d.email_sent) addStatus(d.email_sent, 'email-status sent');
+            if (d.email_error) addStatus(d.email_error, 'email-status failed');
+            if (d.event_created) addStatus(d.event_created, 'event-status');
             history.push({role: 'user', content: msg});
             history.push({role: 'assistant', content: d.response});
             if (history.length > 20) history = history.slice(-20);
