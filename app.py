@@ -30,6 +30,7 @@ REDIRECT_URI = 'https://my-ai-agent-production-5e17.up.railway.app/oauth/callbac
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
 VAPID_CLAIMS_EMAIL = os.environ.get('VAPID_CLAIMS_EMAIL', 'mailto:nathanielwerner13@gmail.com')
+BINA_URL = 'https://my-ai-agent-production-5e17.up.railway.app'
 
 SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner, an 18-year-old entrepreneur and college student in Beverly Hills.
 
@@ -75,7 +76,9 @@ def save_subscriptions(subs):
     with open(SUBSCRIPTIONS_FILE, 'w') as f:
         json.dump(subs, f)
 
-def send_push(title, body, url='/'):
+def send_push(title, body, url=None):
+    if url is None:
+        url = BINA_URL
     subscriptions = load_subscriptions()
     if not subscriptions:
         return
@@ -122,6 +125,27 @@ def load_seen_emails():
 def save_seen_emails(seen):
     with open(SEEN_EMAILS_FILE, 'w') as f:
         json.dump(list(seen), f)
+
+
+# ── Junk Filter ───────────────────────────────────────────────────────────────
+
+def is_important_email(email):
+    junk_keywords = [
+        'noreply', 'no-reply', 'donotreply', 'newsletter', 'notifications@',
+        'mailer', 'updates@', 'info@', 'support@', 'hello@', 'team@',
+        'news@', 'digest', 'unsubscribe', 'marketing', 'promo', 'offer',
+        'notification', 'alert@', 'automated', 'bounce', 'postmaster',
+        'do-not-reply', 'system@', 'admin@', 'billing@', 'invoice@',
+        'receipt@', 'confirm', 'verify', 'activate', 'password',
+        'security alert', 'sign-in', 'signin', 'account activity',
+        'canvas@', 'canvasemail', 'instructure', 'campusdpp'
+    ]
+    sender = email['from'].lower()
+    subject = email['subject'].lower()
+    for word in junk_keywords:
+        if word in sender or word in subject:
+            return False
+    return True
 
 
 # ── Web Search ────────────────────────────────────────────────────────────────
@@ -340,7 +364,7 @@ def monitor_inbox():
                     'read': False,
                     'timestamp': time.time()
                 })
-                send_push('☀️ Bina Morning Briefing', briefing[:100] + '...', '/')
+                send_push('☀️ Good morning Nathaniel', briefing[:100] + '...', BINA_URL)
                 last_briefing_day = la_day
 
             seen = load_seen_emails()
@@ -348,24 +372,27 @@ def monitor_inbox():
             for email in emails:
                 if email['id'] not in seen:
                     seen.add(email['id'])
-                    draft = draft_reply(email)
-                    sender = email['from'].split('<')[0].strip()
-                    add_notification({
-                        'id': email['id'],
-                        'type': 'email',
-                        'from': email['from'],
-                        'subject': email['subject'],
-                        'body': email['body'][:500],
-                        'draft_reply': draft,
-                        'read': False,
-                        'timestamp': time.time()
-                    })
-                    send_push(
-                        f'📧 New email from {sender}',
-                        f'{email["subject"]} — Bina has a draft reply ready',
-                        '/'
-                    )
-                    print(f"New email + push sent: {email['from']}")
+                    if is_important_email(email):
+                        draft = draft_reply(email)
+                        sender = email['from'].split('<')[0].strip()
+                        add_notification({
+                            'id': email['id'],
+                            'type': 'email',
+                            'from': email['from'],
+                            'subject': email['subject'],
+                            'body': email['body'][:500],
+                            'draft_reply': draft,
+                            'read': False,
+                            'timestamp': time.time()
+                        })
+                        send_push(
+                            f'📧 {sender}',
+                            f'{email["subject"]} — Bina\'s reply is ready to approve',
+                            BINA_URL
+                        )
+                        print(f"Important email + push: {email['from']}")
+                    else:
+                        print(f"Filtered junk: {email['from']} - {email['subject']}")
             save_seen_emails(seen)
         except Exception as e:
             print(f"Monitor error: {str(e)}")
@@ -398,6 +425,10 @@ def index():
 @app.route('/manifest.json')
 def manifest():
     return app.send_static_file('manifest.json')
+
+@app.route('/sw.js')
+def service_worker():
+    return app.send_static_file('sw.js')
 
 @app.route('/verify-passphrase', methods=['POST'])
 def verify_passphrase():
@@ -448,7 +479,7 @@ def send_draft():
             if n.get('subject') == subject:
                 n['replied'] = True
         save_notifications(notifications)
-        send_push('✅ Reply Sent', f'Bina sent your reply to {to}', '/')
+        send_push('✅ Reply Sent', f'Your reply to {to} was sent', BINA_URL)
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': error})
 
@@ -470,17 +501,16 @@ def create_event_route():
 
 @app.route('/test-push')
 def test_push():
-    send_push('🔔 Bina Test', 'Push notifications are working!', '/')
-    return '<h2 style="font-family:monospace;color:green">✅ Push sent! Check your iPhone.</h2>'
+    send_push('🔔 Bina Test', 'Push notifications are working!', BINA_URL)
+    return '<h2 style="font-family:monospace;color:green;padding:40px">✅ Push sent! Check your iPhone.</h2>'
 
 @app.route('/test-email')
 def test_email():
-    token = os.environ.get('GOOGLE_REFRESH_TOKEN', 'NOT SET')
-    success, error = send_email('iirawgunzsii@gmail.com', 'Test from Bina', 'Hey! This is Bina testing email directly.')
+    success, error = send_email('iirawgunzsii@gmail.com', 'Test from Bina', 'Hey! Bina testing.')
     if success:
-        return f'<h2 style="color:green;font-family:monospace">✅ Email sent!</h2><p style="font-family:monospace">Token: {token[:30]}...</p>'
+        return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Email sent!</h2>'
     else:
-        return f'<h2 style="color:red;font-family:monospace">❌ Failed: {error}</h2>'
+        return f'<h2 style="color:red;font-family:monospace;padding:40px">❌ Failed: {error}</h2>'
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -538,14 +568,14 @@ def chat():
         failed = [e for e in email_results if not e['success']]
         if sent:
             result['email_sent'] = f"✅ Email sent to {sent[0]['to']}"
-            send_push('📤 Email Sent', f'Bina sent an email to {sent[0]["to"]}', '/')
+            send_push('📤 Email Sent', f'Bina sent an email to {sent[0]["to"]}', BINA_URL)
         if failed:
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
     if calendar_results:
         created = [e for e in calendar_results if e['success']]
         if created:
             result['event_created'] = f"📅 Event created: {created[0]['title']}"
-            send_push('📅 Event Created', f'Bina added "{created[0]["title"]}" to your calendar', '/')
+            send_push('📅 Event Created', f'"{created[0]["title"]}" added to your calendar', BINA_URL)
 
     return jsonify(result)
 
