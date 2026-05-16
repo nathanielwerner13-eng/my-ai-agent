@@ -364,7 +364,7 @@ def monitor_inbox():
                     'read': False,
                     'timestamp': time.time()
                 })
-                send_push('☀️ Good morning Nathaniel', briefing[:100] + '...', BINA_URL)
+                send_push('☀️ Bina', 'Your morning briefing is ready. Open Bina to review.', BINA_URL)
                 last_briefing_day = la_day
 
             seen = load_seen_emails()
@@ -386,13 +386,13 @@ def monitor_inbox():
                             'timestamp': time.time()
                         })
                         send_push(
-                            f'📧 {sender}',
-                            f'{email["subject"]} — Bina\'s reply is ready to approve',
+                            'Bina — Review Required',
+                            f'New message from {sender}. Open Bina to approve reply.',
                             BINA_URL
                         )
-                        print(f"Important email + push: {email['from']}")
+                        print(f"Important + push: {email['from']}")
                     else:
-                        print(f"Filtered junk: {email['from']} - {email['subject']}")
+                        print(f"Filtered: {email['from']} - {email['subject']}")
             save_seen_emails(seen)
         except Exception as e:
             print(f"Monitor error: {str(e)}")
@@ -479,7 +479,7 @@ def send_draft():
             if n.get('subject') == subject:
                 n['replied'] = True
         save_notifications(notifications)
-        send_push('✅ Reply Sent', f'Your reply to {to} was sent', BINA_URL)
+        send_push('Bina ✅', 'Reply sent successfully.', BINA_URL)
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': error})
 
@@ -501,7 +501,7 @@ def create_event_route():
 
 @app.route('/test-push')
 def test_push():
-    send_push('🔔 Bina Test', 'Push notifications are working!', BINA_URL)
+    send_push('Bina 🔔', 'Test notification. Tap to open Bina.', BINA_URL)
     return '<h2 style="font-family:monospace;color:green;padding:40px">✅ Push sent! Check your iPhone.</h2>'
 
 @app.route('/test-email')
@@ -568,14 +568,14 @@ def chat():
         failed = [e for e in email_results if not e['success']]
         if sent:
             result['email_sent'] = f"✅ Email sent to {sent[0]['to']}"
-            send_push('📤 Email Sent', f'Bina sent an email to {sent[0]["to"]}', BINA_URL)
+            send_push('Bina ✅', f'Message sent to {sent[0]["to"]}', BINA_URL)
         if failed:
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
     if calendar_results:
         created = [e for e in calendar_results if e['success']]
         if created:
             result['event_created'] = f"📅 Event created: {created[0]['title']}"
-            send_push('📅 Event Created', f'"{created[0]["title"]}" added to your calendar', BINA_URL)
+            send_push('Bina 📅', f'"{created[0]["title"]}" added to your calendar', BINA_URL)
 
     return jsonify(result)
 
