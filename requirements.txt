@@ -5,3 +5,4 @@ python-dotenv
 duckduckgo_search
 gunicorn
 requests
+pywebpush
