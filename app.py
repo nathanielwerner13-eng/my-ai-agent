@@ -12,6 +12,7 @@ from flask import Flask, request, jsonify, session, redirect
 from flask_cors import CORS
 from anthropic import Anthropic
 from duckduckgo_search import DDGS
+from pywebpush import webpush, WebPushException
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.secret_key = os.environ.get('SECRET_KEY', 'bina-secret-key-2024')
@@ -23,8 +24,12 @@ PASSPHRASE = 'bina2024'
 MEMORY_FILE = 'memory.json'
 NOTIFICATIONS_FILE = 'notifications.json'
 SEEN_EMAILS_FILE = 'seen_emails.json'
+SUBSCRIPTIONS_FILE = 'subscriptions.json'
 GMAIL_SCOPES = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar'
 REDIRECT_URI = 'https://my-ai-agent-production-5e17.up.railway.app/oauth/callback'
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_CLAIMS_EMAIL = os.environ.get('VAPID_CLAIMS_EMAIL', 'mailto:nathanielwerner13@gmail.com')
 
 SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner, an 18-year-old entrepreneur and college student in Beverly Hills.
 
@@ -56,6 +61,35 @@ def load_memory():
 def save_memory(memories):
     with open(MEMORY_FILE, 'w') as f:
         json.dump(memories, f)
+
+
+# ── Push Subscriptions ────────────────────────────────────────────────────────
+
+def load_subscriptions():
+    if os.path.exists(SUBSCRIPTIONS_FILE):
+        with open(SUBSCRIPTIONS_FILE, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_subscriptions(subs):
+    with open(SUBSCRIPTIONS_FILE, 'w') as f:
+        json.dump(subs, f)
+
+def send_push(title, body, url='/'):
+    subscriptions = load_subscriptions()
+    if not subscriptions:
+        return
+    payload = json.dumps({'title': title, 'body': body, 'url': url})
+    for sub in subscriptions:
+        try:
+            webpush(
+                subscription_info=sub,
+                data=payload,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={'sub': VAPID_CLAIMS_EMAIL}
+            )
+        except WebPushException as e:
+            print(f"Push error: {e}")
 
 
 # ── Notifications ─────────────────────────────────────────────────────────────
@@ -243,7 +277,6 @@ def create_calendar_event(title, start, end, description=''):
             headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'},
             json=event
         )
-        print(f"Calendar create: {response.status_code} {response.text[:200]}")
         if response.status_code in [200, 201]:
             return True, response.json().get('htmlLink', '')
         else:
@@ -260,7 +293,6 @@ def process_calendar_commands(text):
         start = match[1].strip()
         end = match[2].strip()
         description = match[3].strip() if match[3] else ''
-        print(f"Creating event: {title} {start} {end}")
         success, link = create_calendar_event(title, start, end, description)
         results.append({'title': title, 'success': success, 'link': link})
     return results
@@ -295,6 +327,7 @@ def monitor_inbox():
             la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
             la_hour = la_time.hour
             la_day = la_time.timetuple().tm_yday
+
             if la_hour == 7 and la_day != last_briefing_day:
                 briefing = generate_morning_briefing()
                 add_notification({
@@ -307,6 +340,7 @@ def monitor_inbox():
                     'read': False,
                     'timestamp': time.time()
                 })
+                send_push('☀️ Bina Morning Briefing', briefing[:100] + '...', '/')
                 last_briefing_day = la_day
 
             seen = load_seen_emails()
@@ -315,6 +349,7 @@ def monitor_inbox():
                 if email['id'] not in seen:
                     seen.add(email['id'])
                     draft = draft_reply(email)
+                    sender = email['from'].split('<')[0].strip()
                     add_notification({
                         'id': email['id'],
                         'type': 'email',
@@ -325,7 +360,12 @@ def monitor_inbox():
                         'read': False,
                         'timestamp': time.time()
                     })
-                    print(f"New email from {email['from']}: {email['subject']}")
+                    send_push(
+                        f'📧 New email from {sender}',
+                        f'{email["subject"]} — Bina has a draft reply ready',
+                        '/'
+                    )
+                    print(f"New email + push sent: {email['from']}")
             save_seen_emails(seen)
         except Exception as e:
             print(f"Monitor error: {str(e)}")
@@ -367,6 +407,19 @@ def verify_passphrase():
         return jsonify({'success': True})
     return jsonify({'success': False}), 401
 
+@app.route('/subscribe', methods=['POST'])
+def subscribe():
+    sub = request.json
+    subs = load_subscriptions()
+    if sub not in subs:
+        subs.append(sub)
+        save_subscriptions(subs)
+    return jsonify({'success': True})
+
+@app.route('/vapid-public-key')
+def vapid_key():
+    return jsonify({'key': VAPID_PUBLIC_KEY})
+
 @app.route('/notifications', methods=['GET'])
 def get_notifications():
     notifications = load_notifications()
@@ -395,6 +448,7 @@ def send_draft():
             if n.get('subject') == subject:
                 n['replied'] = True
         save_notifications(notifications)
+        send_push('✅ Reply Sent', f'Bina sent your reply to {to}', '/')
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': error})
 
@@ -414,6 +468,11 @@ def create_event_route():
     )
     return jsonify({'success': success, 'link': link})
 
+@app.route('/test-push')
+def test_push():
+    send_push('🔔 Bina Test', 'Push notifications are working!', '/')
+    return '<h2 style="font-family:monospace;color:green">✅ Push sent! Check your iPhone.</h2>'
+
 @app.route('/test-email')
 def test_email():
     token = os.environ.get('GOOGLE_REFRESH_TOKEN', 'NOT SET')
@@ -421,20 +480,7 @@ def test_email():
     if success:
         return f'<h2 style="color:green;font-family:monospace">✅ Email sent!</h2><p style="font-family:monospace">Token: {token[:30]}...</p>'
     else:
-        return f'<h2 style="color:red;font-family:monospace">❌ Failed: {error}</h2><p style="font-family:monospace">Token: {token[:30]}...</p>'
-
-@app.route('/test-calendar')
-def test_calendar():
-    success, result = create_calendar_event(
-        'Bina Test Event',
-        '2026-05-16T10:00:00',
-        '2026-05-16T11:00:00',
-        'Created by Bina'
-    )
-    if success:
-        return f'<h2 style="color:green;font-family:monospace">✅ Calendar event created!</h2><p>{result}</p>'
-    else:
-        return f'<h2 style="color:red;font-family:monospace">❌ Failed: {result}</h2>'
+        return f'<h2 style="color:red;font-family:monospace">❌ Failed: {error}</h2>'
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -492,15 +538,14 @@ def chat():
         failed = [e for e in email_results if not e['success']]
         if sent:
             result['email_sent'] = f"✅ Email sent to {sent[0]['to']}"
+            send_push('📤 Email Sent', f'Bina sent an email to {sent[0]["to"]}', '/')
         if failed:
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
     if calendar_results:
         created = [e for e in calendar_results if e['success']]
-        failed_cal = [e for e in calendar_results if not e['success']]
         if created:
             result['event_created'] = f"📅 Event created: {created[0]['title']}"
-        if failed_cal:
-            result['event_error'] = f"📅 Event failed: {failed_cal[0]['link']}"
+            send_push('📅 Event Created', f'Bina added "{created[0]["title"]}" to your calendar', '/')
 
     return jsonify(result)
 
