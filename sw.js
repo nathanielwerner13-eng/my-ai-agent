@@ -1,3 +1,5 @@
+const BINA_URL = 'https://my-ai-agent-production-5e17.up.railway.app';
+
 self.addEventListener('push', function(event) {
     const data = event.data ? event.data.json() : {};
     const title = data.title || 'Bina';
@@ -5,7 +7,8 @@ self.addEventListener('push', function(event) {
         body: data.body || '',
         icon: '/icon-192.png',
         badge: '/icon-192.png',
-        data: { url: data.url || 'https://my-ai-agent-production-5e17.up.railway.app' }
+        vibrate: [200, 100, 200],
+        data: { url: BINA_URL }
     };
     event.waitUntil(self.registration.showNotification(title, options));
 });
@@ -15,14 +18,11 @@ self.addEventListener('notificationclick', function(event) {
     event.waitUntil(
         clients.matchAll({type: 'window', includeUncontrolled: true}).then(function(clientList) {
             for (var i = 0; i < clientList.length; i++) {
-                var client = clientList[i];
-                if (client.url.includes('my-ai-agent-production-5e17') && 'focus' in client) {
-                    return client.focus();
+                if (clientList[i].url.includes('my-ai-agent-production-5e17') && 'focus' in clientList[i]) {
+                    return clientList[i].focus();
                 }
             }
-            if (clients.openWindow) {
-                return clients.openWindow('https://my-ai-agent-production-5e17.up.railway.app');
-            }
+            return clients.openWindow(BINA_URL);
         })
     );
 });
