@@ -66,7 +66,7 @@ PERSONALITY:
 - Sharp, direct, no fluff
 - Write like a smart friend texting — not a formal report
 - Be concise unless depth is needed
-- Only recommend positions when you have real data to back it up
+- Only recommend positions when you have real data and understand the contract mechanics
 
 The current date and time in Los Angeles will be injected into every message."""
 
@@ -249,34 +249,30 @@ def web_search(query, num_results=5):
                 json={'q': query, 'num': num_results}
             )
             data = response.json()
-            output = f"Search results for '{query}':\n\n"
+            output = f"Search: '{query}':\n"
             if data.get('answerBox'):
-                ab = data['answerBox']
-                answer = ab.get('answer') or ab.get('snippet') or ''
+                answer = data['answerBox'].get('answer') or data['answerBox'].get('snippet') or ''
                 if answer:
-                    output += f"Direct answer: {answer}\n\n"
-            for i, r in enumerate(data.get('organic', [])[:num_results], 1):
-                output += f"{i}. {r.get('title', '')}\n   {r.get('snippet', '')}\n\n"
-            if data.get('news'):
-                for n in data['news'][:3]:
-                    output += f"• {n.get('title', '')} — {n.get('date', '')}\n  {n.get('snippet', '')}\n\n"
+                    output += f"Answer: {answer}\n"
+            for r in data.get('organic', [])[:num_results]:
+                output += f"• {r.get('title', '')}: {r.get('snippet', '')}\n"
+            for n in data.get('news', [])[:3]:
+                output += f"• {n.get('title', '')} ({n.get('date', '')}): {n.get('snippet', '')}\n"
             return output
         except Exception as e:
             print(f"Serper error: {str(e)}")
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=num_results))
-            if results:
-                return "\n".join([f"{r['title']}: {r['body']}" for r in results])
-        return "No results found."
+            return "\n".join([f"• {r['title']}: {r['body']}" for r in results])
     except Exception as e:
         return f"Search error: {str(e)}"
 
 
-# ── Polymarket with REAL ODDS ─────────────────────────────────────────────────
+# ── Polymarket with REAL ODDS + CONTRACT MECHANICS ────────────────────────────
 
 def get_polymarket_markets_with_odds(limit=100):
-    """Get markets including actual YES/NO prices."""
+    """Get markets with YES/NO prices, resolution dates, and contract rules."""
     try:
         response = requests.get(
             'https://gamma-api.polymarket.com/markets',
@@ -297,7 +293,7 @@ def get_polymarket_markets_with_odds(limit=100):
             except:
                 volume = 0
 
-            # Get actual odds - outcomePrices is a JSON string of prices
+            # Real odds
             yes_price = None
             no_price = None
             try:
@@ -308,7 +304,6 @@ def get_polymarket_markets_with_odds(limit=100):
                     prices = outcome_prices
                 else:
                     prices = []
-
                 if len(prices) >= 2:
                     yes_price = float(prices[0])
                     no_price = float(prices[1])
@@ -318,12 +313,50 @@ def get_polymarket_markets_with_odds(limit=100):
             except:
                 pass
 
+            # Resolution date
+            end_date = m.get('endDate', m.get('end_date_iso', ''))
+            days_until = None
+            end_date_str = 'Unknown'
+            if end_date:
+                try:
+                    end_dt = datetime.datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                    days_until = (end_dt - datetime.datetime.now(datetime.timezone.utc)).days
+                    end_date_str = end_dt.strftime('%b %d, %Y')
+                except:
+                    end_date_str = str(end_date)[:10]
+
+            # Contract description/rules
+            description = ''
+            if m.get('description'):
+                description = m['description'][:400]
+
+            # Detect artificial floors
+            has_floor = False
+            floor_description = ''
+            desc_lower = description.lower()
+            title_lower = title.lower()
+            if any(phrase in desc_lower for phrase in
+                   ['50-50', '50/50', 'neither', 'split evenly', 'resolve 0.5',
+                    'resolve at 0.5', 'push', 'no contest', '0.50']):
+                has_floor = True
+                floor_description = 'CONTRACT HAS ARTIFICIAL FLOOR — resolves 50/50 if neither event happens'
+
+            # Skip already-resolved markets
+            skip = False
+            if yes_price is not None and (yes_price > 0.92 or yes_price < 0.08):
+                skip = True
+
             processed.append({
                 'title': title,
                 'volume': volume,
                 'yes_price': yes_price,
                 'no_price': no_price,
-                'end_date': m.get('endDate', ''),
+                'end_date': end_date_str,
+                'days_until_resolution': days_until,
+                'description': description,
+                'has_floor': has_floor,
+                'floor_description': floor_description,
+                'skip': skip,
                 'tags': [t.get('label', '') if isinstance(t, dict) else str(t)
                          for t in (m.get('tags') or [])],
             })
@@ -333,87 +366,110 @@ def get_polymarket_markets_with_odds(limit=100):
         print(f"Polymarket error: {str(e)}")
         return []
 
+
+# ── Categorize Markets — Sports properly excluded ─────────────────────────────
+
 def categorize_polymarket(markets):
-    """Categorize markets and find genuine opportunities."""
     political = []
     crypto_markets = []
     weather = []
     economics = []
-    other = []
+    sports = []
+
+    SPORTS_KEYWORDS = [
+        'nhl', 'nba', 'nfl', 'mlb', 'mls', 'ufc', 'fifa', 'world cup',
+        'stanley cup', 'super bowl', 'championship', 'playoffs',
+        'golden knights', 'hurricanes', 'rangers', 'oilers', 'panthers',
+        'lakers', 'celtics', 'warriors', 'heat', 'knicks', 'nuggets',
+        'patriots', 'chiefs', 'eagles', 'cowboys', 'bills', '49ers',
+        'yankees', 'dodgers', 'astros', 'braves', 'mets',
+        'tennis', 'golf', 'formula 1', 'f1', 'boxing', 'wrestling',
+        'wimbledon', 'us open', 'masters', 'olympics', 'premier league',
+        'la liga', 'serie a', 'bundesliga', 'champions league',
+        'win the series', 'win the finals', 'win the cup', 'win the bowl',
+        'points scored', 'total goals', 'over/under'
+    ]
 
     for m in markets:
+        if m.get('skip'):
+            continue
         title = m['title'].lower()
         tags = [t.lower() for t in m.get('tags', [])]
+        all_text = title + ' ' + ' '.join(tags)
 
-        if any(w in title or w in ' '.join(tags) for w in
-               ['weather', 'temperature', 'rain', 'snow', 'hurricane', 'tornado',
-                'flood', 'storm', 'celsius', 'fahrenheit', 'precipitation']):
+        if any(w in all_text for w in SPORTS_KEYWORDS):
+            sports.append(m)
+        elif any(w in all_text for w in [
+                'weather', 'temperature', 'rain', 'snow', 'hurricane named',
+                'tornado', 'flood', 'storm', 'celsius', 'fahrenheit',
+                'precipitation', 'drought', 'wildfire', 'earthquake',
+                'typhoon', 'blizzard', 'inches of', 'degrees']):
             weather.append(m)
-        elif any(w in title or w in ' '.join(tags) for w in
-                 ['bitcoin', 'btc', 'eth', 'crypto', 'solana', 'coin', 'token', 'defi', 'nft']):
+        elif any(w in all_text for w in [
+                'bitcoin', 'btc', 'eth', 'ethereum', 'crypto', 'solana',
+                'coin', 'token', 'defi', 'nft', 'blockchain', 'web3',
+                'altcoin', 'binance', 'coinbase']):
             crypto_markets.append(m)
-        elif any(w in title or w in ' '.join(tags) for w in
-                 ['fed', 'federal reserve', 'rate', 'gdp', 'inflation', 'recession',
-                  'oil', 'gold', 'stock', 'nasdaq', 's&p', 'dow', 'economy']):
+        elif any(w in all_text for w in [
+                'fed', 'federal reserve', 'interest rate', 'gdp', 'inflation',
+                'recession', 'oil price', 'gold price', 'stock market',
+                'nasdaq', 's&p', 'dow jones', 'unemployment', 'cpi',
+                'jobs report', 'treasury', 'yield', 'tariff', 'trade deal']):
             economics.append(m)
-        elif any(w in title or w in ' '.join(tags) for w in
-                 ['president', 'election', 'congress', 'senate', 'trump', 'biden',
-                  'democrat', 'republican', 'war', 'nato', 'ukraine', 'china', 'iran',
-                  'israel', 'vote', 'prime minister', 'tariff', 'trade', 'geopolit']):
+        elif any(w in all_text for w in [
+                'president', 'election', 'congress', 'senate', 'trump', 'biden',
+                'democrat', 'republican', 'war', 'nato', 'ukraine', 'china',
+                'iran', 'israel', 'vote', 'prime minister', 'geopolit',
+                'policy', 'government', 'minister', 'parliament', 'military',
+                'sanction', 'ceasefire', 'invasion', 'coup']):
             political.append(m)
-        else:
-            other.append(m)
 
-    # Sort by volume
-    for lst in [political, crypto_markets, weather, economics]:
+    for lst in [political, crypto_markets, weather, economics, sports]:
         lst.sort(key=lambda x: x['volume'], reverse=True)
 
     return {
         'political': political[:15],
         'crypto': crypto_markets[:10],
         'weather': weather[:10],
-        'economics': economics[:10]
+        'economics': economics[:10],
+        'sports': sports[:8]
     }
 
+
 def format_markets_for_analysis(categorized):
-    """Format market data with real odds for Claude to analyze."""
+    """Format with real odds, resolution dates, floor warnings."""
     output = ""
 
     def format_category(name, markets):
         if not markets:
             return ""
-        result = f"\n{name.upper()} MARKETS (with real YES/NO prices):\n"
+        result = f"\n{name.upper()} MARKETS:\n"
         for m in markets[:8]:
             yes = m.get('yes_price')
             no = m.get('no_price')
             vol = m.get('volume', 0)
+            end = m.get('end_date', 'Unknown')
+            days = m.get('days_until_resolution')
+            has_floor = m.get('has_floor', False)
+            floor_desc = m.get('floor_description', '')
+            days_str = f"{days}d left" if days is not None else "?"
+
             if yes is not None:
-                result += f"• {m['title']}\n  YES: {yes:.1%} | NO: {no:.1%} | Vol: ${vol:,.0f}\n"
+                result += f"• {m['title']}\n"
+                result += f"  YES: {yes:.1%} | NO: {no:.1%} | Vol: ${vol:,.0f} | Resolves: {end} ({days_str})\n"
+                if has_floor:
+                    result += f"  ⚠️ {floor_desc}\n"
+                if m.get('description'):
+                    result += f"  Rules: {m['description'][:120]}\n"
             else:
-                result += f"• {m['title']}\n  Vol: ${vol:,.0f} (odds unavailable)\n"
+                result += f"• {m['title']} | Vol: ${vol:,.0f} | Resolves: {end} ({days_str})\n"
         return result
 
     output += format_category("Political", categorized['political'])
     output += format_category("Crypto Prediction", categorized['crypto'])
     output += format_category("Weather", categorized['weather'])
     output += format_category("Economic", categorized['economics'])
-
-    return output
-
-
-# ── Commodities (Gold & Oil) ──────────────────────────────────────────────────
-
-def get_commodities_data():
-    """Get gold and oil prices."""
-    output = "\nCOMMODITIES:\n"
-    try:
-        # Gold price via Yahoo Finance alternative
-        gold_res = web_search("gold price per ounce today USD", num_results=2)
-        oil_res = web_search("crude oil WTI price today USD per barrel", num_results=2)
-        output += f"Gold search: {gold_res[:200]}\n"
-        output += f"Oil search: {oil_res[:200]}\n"
-    except Exception as e:
-        output += f"Commodities unavailable: {str(e)}\n"
+    output += format_category("Sports", categorized['sports'])
     return output
 
 
@@ -435,7 +491,7 @@ def get_crypto_data():
         if response.status_code == 200:
             return response.json()
         return {}
-    except Exception as e:
+    except:
         return {}
 
 def get_fear_greed_index():
@@ -459,9 +515,7 @@ def format_crypto_report(crypto_data, fear_greed):
     }
     output = "**Crypto Prices**\n"
     if fear_greed:
-        val = fear_greed.get('value', 'N/A')
-        label = fear_greed.get('value_classification', 'N/A')
-        output += f"Fear & Greed: **{val} — {label}**\n\n"
+        output += f"Fear & Greed: **{fear_greed.get('value')} — {fear_greed.get('value_classification')}**\n\n"
     for coin_id, name in coin_names.items():
         if coin_id in crypto_data:
             d = crypto_data[coin_id]
@@ -469,6 +523,20 @@ def format_crypto_report(crypto_data, fear_greed):
             change = d.get('usd_24h_change', 0) or 0
             arrow = '📈' if change > 0 else '📉'
             output += f"{arrow} **{name}**: ${price:,.2f} | {change:+.2f}% 24h\n"
+    return output
+
+
+# ── Commodities ───────────────────────────────────────────────────────────────
+
+def get_commodities_data():
+    output = "**Commodities**\n"
+    try:
+        gold = web_search("gold price per ounce today USD spot price", num_results=2)
+        oil = web_search("WTI crude oil price today USD per barrel", num_results=2)
+        output += f"Gold: {gold[:200]}\n"
+        output += f"Oil: {oil[:200]}\n"
+    except Exception as e:
+        output += f"Unavailable: {str(e)}\n"
     return output
 
 
@@ -480,10 +548,10 @@ def research_political_news():
         "world politics major events today",
         "Federal Reserve interest rate decision news",
         "Trump policy announcement today",
-        "China US relations geopolitical news today",
+        "China US trade geopolitical news today",
         "Middle East war news today",
-        "Ukraine Russia war news today",
-        "economic data inflation jobs report today",
+        "Ukraine Russia war update today",
+        "economic data inflation report today",
         "oil gold commodity market news today"
     ]
     all_results = ""
@@ -494,23 +562,22 @@ def research_political_news():
     return all_results
 
 
-# ── Weather Research ──────────────────────────────────────────────────────────
+# ── Weather Market Research ───────────────────────────────────────────────────
 
 def research_weather_for_markets(weather_markets):
-    """Research actual weather data for active weather prediction markets."""
     if not weather_markets:
         return "No weather markets found."
-
-    output = "WEATHER MARKET RESEARCH:\n"
+    output = "**Weather Market Research**\n"
     for m in weather_markets[:5]:
         title = m['title']
         yes = m.get('yes_price')
         no = m.get('no_price')
-        # Search for relevant weather data
-        search_query = f"weather forecast {title}"
-        result = web_search(search_query, num_results=2)
+        end = m.get('end_date', 'Unknown')
+        days = m.get('days_until_resolution')
+        result = web_search(f"weather forecast {title}", num_results=2)
         odds_str = f"YES: {yes:.1%} | NO: {no:.1%}" if yes else "odds N/A"
-        output += f"\nMarket: {title}\nCurrent odds: {odds_str}\nWeather data: {result[:300]}\n"
+        days_str = f"{days}d left" if days is not None else "?"
+        output += f"\n• {title}\n  Odds: {odds_str} | Resolves: {end} ({days_str})\n  Forecast data: {result[:300]}\n"
         time.sleep(0.5)
     return output
 
@@ -530,16 +597,17 @@ def run_overnight_research():
         'synthesis': ''
     }
 
-    # Step 1 — Polymarket with real odds
-    print("Scanning Polymarket with odds...")
+    # Step 1 — Polymarket with real odds + contract mechanics
+    print("Scanning Polymarket with contract mechanics...")
     try:
         markets = get_polymarket_markets_with_odds(limit=100)
         categorized = categorize_polymarket(markets)
         poly_formatted = format_markets_for_analysis(categorized)
         report['polymarket'] = poly_formatted
         report['weather_markets'] = categorized.get('weather', [])
-        save_memory(f"Polymarket scan with odds: {poly_formatted[:500]}", memory_type='research')
-        print(f"Polymarket: {len(markets)} markets with odds")
+        save_memory(f"Polymarket scan: {poly_formatted[:500]}", memory_type='research')
+        total = sum(len(v) for v in categorized.values())
+        print(f"Polymarket: {total} markets categorized")
     except Exception as e:
         report['polymarket'] = f"Polymarket unavailable: {str(e)}"
         print(f"Polymarket error: {str(e)}")
@@ -551,8 +619,7 @@ def run_overnight_research():
     try:
         crypto_data = get_crypto_data()
         fear_greed = get_fear_greed_index()
-        crypto_report = format_crypto_report(crypto_data, fear_greed)
-        report['crypto'] = crypto_report
+        report['crypto'] = format_crypto_report(crypto_data, fear_greed)
         print("Crypto done")
     except Exception as e:
         report['crypto'] = f"Crypto unavailable: {str(e)}"
@@ -562,8 +629,7 @@ def run_overnight_research():
     # Step 3 — Commodities
     print("Getting commodities...")
     try:
-        commodities = get_commodities_data()
-        report['commodities'] = commodities
+        report['commodities'] = get_commodities_data()
         print("Commodities done")
     except Exception as e:
         report['commodities'] = f"Commodities unavailable: {str(e)}"
@@ -573,8 +639,7 @@ def run_overnight_research():
     # Step 4 — Political news
     print("Researching political news...")
     try:
-        political_data = research_political_news()
-        report['political'] = political_data[:3000]
+        report['political'] = research_political_news()[:3000]
         print("Political done")
     except Exception as e:
         report['political'] = f"Political unavailable: {str(e)}"
@@ -585,30 +650,32 @@ def run_overnight_research():
     print("Researching weather markets...")
     try:
         weather_markets = report.get('weather_markets', [])
-        if weather_markets:
-            weather_research = research_weather_for_markets(weather_markets)
-            report['weather'] = weather_research
-            print("Weather done")
-        else:
-            report['weather'] = "No active weather markets found."
+        report['weather'] = research_weather_for_markets(weather_markets) if weather_markets else "No active weather markets."
+        print("Weather done")
     except Exception as e:
-        report['weather'] = f"Weather research unavailable: {str(e)}"
+        report['weather'] = f"Weather unavailable: {str(e)}"
 
     time.sleep(10)
 
-    # Step 6 — Synthesize
+    # Step 6 — Synthesize with Claude
     print("Synthesizing...")
     try:
         synthesis_prompt = f"""You are Bina, texting Nathaniel (18, Beverly Hills) his morning intelligence report.
 
-IMPORTANT: Only recommend positions where you have REAL ODDS DATA. If a market shows YES at 95%+, there is NO edge — don't recommend it. Only flag markets where the price seems WRONG based on real world data.
+CRITICAL RULES — break these and the report is worthless:
+1. NEVER recommend a position without stating the exact resolution date
+2. NEVER recommend YES/NO on markets already above 90% or below 10% — no edge
+3. If a market has an ARTIFICIAL FLOOR (like GTA6/Bitcoin that resolves 50/50 if neither happens by deadline), explain this mechanic clearly. These are NOT normal bets — they lock up capital for near-zero expected return. Flag them as traps unless there's a specific reason to think the underlying event will actually happen before the deadline
+4. ONLY recommend positions where you can explain WHY the current price is WRONG based on real data
+5. Resolution date matters massively — a 45% YES expiring in 3 days is completely different from 45% YES expiring in 8 months
+6. For crypto recommendations, state current price, required move percentage, and realistic timeframe
 
 DATA:
 
-POLYMARKET MARKETS WITH REAL ODDS:
+POLYMARKET WITH CONTRACT MECHANICS + RESOLUTION DATES:
 {report['polymarket']}
 
-CRYPTO PRICES:
+CRYPTO:
 {report['crypto']}
 
 COMMODITIES:
@@ -618,38 +685,29 @@ POLITICAL NEWS:
 {report['political'][:1500]}
 
 WEATHER MARKETS:
-{report['weather'][:1000]}
+{report['weather'][:800]}
 
-Write like a smart friend texting him. Use **bold** for numbers. Keep it under 400 words.
+Write like a smart friend texting. **Bold** key numbers. Under 400 words.
 
-Structure:
+## What I found overnight
+Single most interesting genuine opportunity you found.
 
-## What I found
-
-One sentence — the most interesting thing.
-
-## Top plays right now
-
-For each play:
-- Name the exact market or asset
-- Current price/odds (use real numbers from the data)
-- Your position: YES/NO/BUY/SELL
+## Top plays (real edges only)
+For each:
+- Exact market or asset name
+- Current price/odds + resolution date
+- Position: YES/NO/BUY/SELL
 - Confidence: HIGH/MEDIUM/LOW
-- Why in 1-2 sentences using actual data
+- Why the price is wrong — specific data, not vibes
 
-ONLY recommend if you see a genuine mismatch between odds and reality. If YES is already at 90%+, skip it.
-
-## Weather market play (if any)
-
-If there's a weather market where you can cross-reference actual forecast data vs current odds, flag it specifically.
+## Weather play
+If any weather market has forecast data that disagrees with current odds, flag it with actual numbers.
 
 ## Watch today
+2-3 specific events next 24h that create windows.
 
-2-3 specific events in next 24h that could create opportunities.
-
-## The contrarian take
-
-One non-obvious insight backed by the data."""
+## The edge
+One non-obvious contrarian insight from the data."""
 
         response = client.messages.create(
             model="claude-sonnet-4-5",
@@ -663,11 +721,12 @@ One non-obvious insight backed by the data."""
         report['synthesis'] = f"Synthesis error: {str(e)}"
         print(f"Synthesis error: {str(e)}")
 
-    # Save and deliver
+    # Save to file
     try:
         save_data = {k: v for k, v in report.items() if k != 'weather_markets'}
         with open(OVERNIGHT_REPORT_FILE, 'w') as f:
             json.dump(save_data, f)
+        print("Report saved")
     except Exception as e:
         print(f"Save error: {str(e)}")
 
@@ -688,7 +747,6 @@ def deliver_report(report=None):
             return
 
     date = report.get('date', datetime.datetime.now().strftime('%Y-%m-%d'))
-    report_time = report.get('time', '')
 
     if report.get('synthesis'):
         add_notification({
@@ -718,7 +776,7 @@ def deliver_report(report=None):
         add_notification({
             'id': f'poly-{date}-{int(time.time())}',
             'type': 'intelligence',
-            'subject': '🎯 Polymarket — Live Odds',
+            'subject': '🎯 Polymarket — Live Odds + Contract Details',
             'from': 'Bina Markets',
             'body': report['polymarket'],
             'draft_reply': '',
@@ -779,9 +837,8 @@ def get_inbox_emails(max_results=10):
             headers={'Authorization': f'Bearer {access_token}'},
             params={'maxResults': max_results, 'labelIds': 'INBOX', 'q': 'is:unread'}
         )
-        data = response.json()
         emails = []
-        for msg in data.get('messages', []):
+        for msg in response.json().get('messages', []):
             msg_response = requests.get(
                 f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg["id"]}',
                 headers={'Authorization': f'Bearer {access_token}'},
@@ -815,12 +872,12 @@ def draft_reply(email):
         response = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=500,
-            system="You are Bina, drafting a reply on behalf of Nathaniel Werner, 18-year-old entrepreneur in Beverly Hills. Write a concise, professional reply. Just the reply body, sign off with Nathaniel Werner.",
-            messages=[{"role": "user", "content": f"Draft a reply:\n\nFrom: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"}]
+            system="You are Bina, drafting a reply on behalf of Nathaniel Werner, 18-year-old entrepreneur in Beverly Hills. Concise, professional. Reply body only, sign off as Nathaniel Werner.",
+            messages=[{"role": "user", "content": f"Draft reply:\nFrom: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"}]
         )
         return response.content[0].text
     except Exception as e:
-        return f"Could not draft reply: {str(e)}"
+        return f"Could not draft: {str(e)}"
 
 
 # ── Google Calendar ───────────────────────────────────────────────────────────
@@ -840,7 +897,7 @@ def get_upcoming_events(max_results=10):
             end = item['end'].get('dateTime', item['end'].get('date', ''))
             events.append({'id': item['id'], 'title': item.get('summary', '(no title)'), 'start': start, 'end': end})
         return events
-    except Exception as e:
+    except:
         return []
 
 def create_calendar_event(title, start, end, description=''):
@@ -864,9 +921,8 @@ def create_calendar_event(title, start, end, description=''):
 
 def process_calendar_commands(text):
     pattern = r'CREATE_EVENT\|([^\|]+)\|([^\|]+)\|([^\|]+)\|?([^E]*)END_EVENT'
-    matches = re.findall(pattern, text, re.DOTALL)
     results = []
-    for match in matches:
+    for match in re.findall(pattern, text, re.DOTALL):
         title, start, end = match[0].strip(), match[1].strip(), match[2].strip()
         description = match[3].strip() if match[3] else ''
         success, link = create_calendar_event(title, start, end, description)
@@ -902,7 +958,7 @@ def master_monitor():
                     response = client.messages.create(
                         model="claude-sonnet-4-5",
                         max_tokens=300,
-                        system="You are Bina texting Nathaniel his morning briefing. Short, punchy, actionable. Use **bold** for important things.",
+                        system="You are Bina texting Nathaniel his morning briefing. Short, punchy, actionable. **Bold** important things.",
                         messages=[{"role": "user", "content": f"Morning briefing.\nSchedule:\n{events_text}\nEmails:\n{emails_text}"}]
                     )
                     add_notification({
@@ -952,9 +1008,8 @@ def master_monitor():
 
 def process_email_commands(text):
     pattern = r'SEND_EMAIL\|(.*?)\|(.*?)\|(.*?)END_EMAIL'
-    matches = re.findall(pattern, text, re.DOTALL)
     results = []
-    for to, subject, body in matches:
+    for to, subject, body in re.findall(pattern, text, re.DOTALL):
         success, error = send_email(to.strip(), subject.strip(), body.strip())
         results.append({'to': to.strip(), 'subject': subject.strip(), 'success': success, 'error': error})
     return results
@@ -997,23 +1052,6 @@ def subscribe():
 @app.route('/vapid-public-key')
 def vapid_key():
     return jsonify({'key': VAPID_PUBLIC_KEY})
-
-@app.route('/generate-vapid')
-def generate_vapid():
-    try:
-        private_key = ec.generate_private_key(ec.SECP256R1())
-        pub_bytes = private_key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
-        priv_raw = private_key.private_numbers().private_value.to_bytes(32, 'big')
-        pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b"=").decode()
-        priv_b64 = base64.urlsafe_b64encode(priv_raw).rstrip(b"=").decode()
-        return f"""<html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
-        <h2>VAPID Keys</h2>
-        <p><b>PUBLIC:</b></p><textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;padding:8px;">{pub_b64}</textarea>
-        <p><b>PRIVATE:</b></p><textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;padding:8px;">{priv_b64}</textarea>
-        </body></html>"""
-    except Exception as e:
-        import traceback
-        return f'<pre style="color:red;padding:40px">{traceback.format_exc()}</pre>'
 
 @app.route('/notifications', methods=['GET'])
 def get_notifications():
@@ -1093,6 +1131,23 @@ def get_memories_route():
     memories = search_memories(query, top_k=10, threshold=0.3)
     return jsonify({'memories': memories, 'count': len(memories)})
 
+@app.route('/generate-vapid')
+def generate_vapid():
+    try:
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        pub_bytes = private_key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+        priv_raw = private_key.private_numbers().private_value.to_bytes(32, 'big')
+        pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b"=").decode()
+        priv_b64 = base64.urlsafe_b64encode(priv_raw).rstrip(b"=").decode()
+        return f"""<html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
+        <h2>VAPID Keys</h2>
+        <p><b>PUBLIC:</b></p><textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;padding:8px;">{pub_b64}</textarea>
+        <p><b>PRIVATE:</b></p><textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;padding:8px;">{priv_b64}</textarea>
+        </body></html>"""
+    except Exception as e:
+        import traceback
+        return f'<pre style="color:red;padding:40px">{traceback.format_exc()}</pre>'
+
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
@@ -1101,7 +1156,7 @@ def chat():
 
     la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
     la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
-    user_message_with_context = f"[Current date and time in Los Angeles: {la_time_str}]\n\n{user_message}"
+    user_message_with_context = f"[LA Time: {la_time_str}]\n\n{user_message}"
 
     all_memories = get_all_context_memories(user_message)
     memory_context = format_memories(all_memories)
@@ -1115,7 +1170,7 @@ def chat():
     if any(word in msg_lower for word in ['polymarket', 'prediction market', 'odds', 'bet', 'market']):
         markets = get_polymarket_markets_with_odds(limit=50)
         categorized = categorize_polymarket(markets)
-        user_message_with_context += f"\n\nLive Polymarket with odds:\n{format_markets_for_analysis(categorized)}"
+        user_message_with_context += f"\n\nLive Polymarket:\n{format_markets_for_analysis(categorized)}"
 
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'stock', 'weather', 'research', 'tell me about', 'what happened',
@@ -1127,12 +1182,12 @@ def chat():
     if any(word in msg_lower for word in deep_triggers):
         user_message_with_context += f"\n\nDeep research:\n{web_search(user_message, num_results=5)}"
     elif any(word in msg_lower for word in search_triggers):
-        user_message_with_context += f"\n\nSearch results:\n{web_search(user_message)}"
+        user_message_with_context += f"\n\nSearch:\n{web_search(user_message)}"
 
     if any(word in msg_lower for word in ['schedule', 'calendar', 'meeting', 'tomorrow', 'what do i have']):
         events = get_upcoming_events(max_results=5)
         if events:
-            user_message_with_context += f"\n\nUpcoming events:\n" + "\n".join([f"- {e['title']} at {e['start']}" for e in events])
+            user_message_with_context += f"\n\nCalendar:\n" + "\n".join([f"- {e['title']} at {e['start']}" for e in events])
         else:
             user_message_with_context += "\n\nCalendar is empty."
 
