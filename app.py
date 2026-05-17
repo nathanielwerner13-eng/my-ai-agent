@@ -89,6 +89,7 @@ def send_push(title, body, url=None):
         print("No push subscriptions")
         return
     payload = json.dumps({'title': title, 'body': body, 'url': url})
+    good_subs = []
     for sub in subscriptions:
         try:
             webpush(
@@ -98,9 +99,16 @@ def send_push(title, body, url=None):
                 vapid_claims={'sub': VAPID_CLAIMS_EMAIL}
             )
             print(f"Push sent: {title}")
+            good_subs.append(sub)
         except WebPushException as e:
-            print(f"Push error: {e}")
-            print(f"Response body: {e.response.text if hasattr(e, 'response') and e.response else 'no response'}")
+            resp = e.response.text if hasattr(e, 'response') and e.response else 'no response'
+            print(f"Push error: {e} — {resp}")
+            # If subscription is invalid, don't keep it
+            if '400' in str(e) or '410' in str(e):
+                print("Removing invalid subscription")
+            else:
+                good_subs.append(sub)
+    save_subscriptions(good_subs)
 
 
 # ── Notifications ─────────────────────────────────────────────────────────────
@@ -446,6 +454,11 @@ def verify_passphrase():
         return jsonify({'success': True})
     return jsonify({'success': False}), 401
 
+@app.route('/clear-subs')
+def clear_subs():
+    save_subscriptions([])
+    return '<h2 style="font-family:monospace;color:green;padding:40px">✅ Subscriptions cleared! Now reopen Bina on iPhone and log in.</h2>'
+
 @app.route('/subscribe', methods=['POST'])
 def subscribe():
     sub = request.json
@@ -464,29 +477,21 @@ def vapid_key():
 def generate_vapid():
     try:
         private_key = ec.generate_private_key(ec.SECP256R1())
-
-        # Get uncompressed public key (04 + x + y = 65 bytes = 87 base64url chars)
         pub_bytes = private_key.public_key().public_bytes(
             serialization.Encoding.X962,
             serialization.PublicFormat.UncompressedPoint
         )
-
-        # Get raw private key integer directly — correct way
         priv_numbers = private_key.private_numbers()
         priv_int = priv_numbers.private_value
         priv_raw = priv_int.to_bytes(32, 'big')
-
         pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b"=").decode()
         priv_b64 = base64.urlsafe_b64encode(priv_raw).rstrip(b"=").decode()
-
-        # Verify they are different
         keys_match = pub_b64.endswith(priv_b64) or priv_b64 in pub_b64
-
         return f"""
         <html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
         <h2>✅ Fresh VAPID Keys</h2>
-        <p>Public key: {len(pub_b64)} chars | Private key: {len(priv_b64)} chars</p>
-        <p style="color:{'red' if keys_match else '#0f0'}">Keys are {'OVERLAPPING - REFRESH PAGE' if keys_match else 'distinct ✅'}</p>
+        <p>Public: {len(pub_b64)} chars | Private: {len(priv_b64)} chars</p>
+        <p style="color:{'red' if keys_match else '#0f0'}">Keys are {'OVERLAPPING - REFRESH' if keys_match else 'distinct ✅'}</p>
         <br>
         <p><b>VAPID_PUBLIC_KEY:</b></p>
         <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{pub_b64}</textarea>
