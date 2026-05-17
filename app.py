@@ -171,15 +171,15 @@ def save_subscriptions(subs):
     with open(SUBSCRIPTIONS_FILE, 'w') as f:
         json.dump(subs, f)
 
-def send_push(title, body, url=None):
+def send_push(title, body, url=None, notif_type='feed'):
     if url is None:
-        url = BINA_URL + '?open=notifications'
+        url = BINA_URL
     if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
         return
     subscriptions = load_subscriptions()
     if not subscriptions:
         return
-    payload = json.dumps({'title': title, 'body': body, 'url': url})
+    payload = json.dumps({'title': title, 'body': body, 'url': url, 'type': notif_type})
     good_subs = []
     for sub in subscriptions:
         try:
@@ -488,7 +488,7 @@ def monitor_inbox():
                     'read': False,
                     'timestamp': time.time()
                 })
-                send_push('☀️ Bina', 'Your morning briefing is ready.', BINA_URL + '?open=notifications')
+                send_push('☀️ Bina', 'Your morning briefing is ready.', BINA_URL + '?open=feed', notif_type='feed')
                 last_briefing_day = la_day
 
             seen = load_seen_emails()
@@ -513,7 +513,12 @@ def monitor_inbox():
                             f"Received email from {email['from']} about: {email['subject']}",
                             memory_type='email'
                         )
-                        send_push('Bina — Review Required', f'New message from {sender}.', BINA_URL + '?open=notifications')
+                        send_push(
+                            'Bina — New Email',
+                            f'From {sender}: {email["subject"]}',
+                            BINA_URL + '?open=inbox',
+                            notif_type='email'
+                        )
                         print(f"Important + push: {email['from']}")
                     else:
                         print(f"Filtered: {email['from']} - {email['subject']}")
@@ -625,7 +630,7 @@ def send_draft():
             if n.get('subject') == subject:
                 n['replied'] = True
         save_notifications(notifications)
-        send_push('Bina ✅', 'Reply sent successfully.', BINA_URL + '?open=notifications')
+        send_push('Bina ✅', 'Reply sent.', BINA_URL + '?open=inbox', notif_type='email')
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': error})
 
@@ -642,8 +647,13 @@ def create_event_route():
 
 @app.route('/test-push')
 def test_push():
-    send_push('Bina 🔔', 'Test notification.', BINA_URL + '?open=notifications')
+    send_push('Bina 🔔', 'Test — Intel Feed.', BINA_URL + '?open=feed', notif_type='feed')
     return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Push sent!</h2>'
+
+@app.route('/test-push-email')
+def test_push_email():
+    send_push('Bina 📧', 'Test — Inbox.', BINA_URL + '?open=inbox', notif_type='email')
+    return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Email push sent!</h2>'
 
 @app.route('/test-email')
 def test_email():
@@ -729,7 +739,7 @@ def chat():
         failed = [e for e in email_results if not e['success']]
         if sent:
             result['email_sent'] = f"✅ Email sent to {sent[0]['to']}"
-            send_push('Bina ✅', f'Message sent to {sent[0]["to"]}', BINA_URL + '?open=notifications')
+            send_push('Bina ✅', f'Message sent to {sent[0]["to"]}', BINA_URL + '?open=inbox', notif_type='email')
             save_memory(f"Sent email to {sent[0]['to']} — subject: {sent[0]['subject']}", memory_type='email')
         if failed:
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
@@ -737,7 +747,7 @@ def chat():
         created = [e for e in calendar_results if e['success']]
         if created:
             result['event_created'] = f"📅 Event created: {created[0]['title']}"
-            send_push('Bina 📅', f'"{created[0]["title"]}" added to your calendar', BINA_URL + '?open=notifications')
+            send_push('Bina 📅', f'"{created[0]["title"]}" added to your calendar', BINA_URL + '?open=feed', notif_type='feed')
             save_memory(f"Created calendar event: {created[0]['title']}", memory_type='calendar')
 
     return jsonify(result)
