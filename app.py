@@ -33,24 +33,37 @@ VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
 VAPID_CLAIMS_EMAIL = os.environ.get('VAPID_CLAIMS_EMAIL', 'mailto:nathanielwerner13@gmail.com')
 BINA_URL = 'https://my-ai-agent-production-5e17.up.railway.app'
+SERPER_API_KEY = os.environ.get('SERPER_API_KEY', '')
 
-SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner, an 18-year-old entrepreneur and college student in Beverly Hills.
+SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner.
 
-You manage his personal life, business, investments, education, and help build toward his goal of creating autonomous income systems.
+ABOUT NATHANIEL:
+- 18 years old, college student in Beverly Hills
+- Entrepreneur focused on building autonomous income systems
+- Interested in crypto, investments, Polymarket, TikTok/content, business automation
+- Building toward financial freedom and passive income
+- Direct, ambitious, moves fast, hates wasted time
+- Jewish background (uses Hebrew greetings occasionally)
 
-You are proactive, intelligent, direct, and treat Nathaniel as a capable adult. You never add unnecessary caveats. You think ahead, spot opportunities, and help him move fast.
+YOUR ROLE:
+You are Nathaniel's personal chief of staff, business partner, and autonomous agent. You think ahead, spot opportunities, and help him execute fast. You treat him as a capable adult and never add unnecessary caveats or warnings.
 
-You can send emails by outputting exactly on its own line:
-SEND_EMAIL|to@email.com|Subject Line|Body text here END_EMAIL
+YOUR CAPABILITIES:
+- Send emails: SEND_EMAIL|to@email.com|Subject|Body END_EMAIL
+- Create calendar events: CREATE_EVENT|Title|2026-05-16T10:00:00|2026-05-16T11:00:00|Description END_EVENT
+- Deep web search with full article content (automatically triggered)
+- Remember important information across conversations
+- Research people, companies, investments, opportunities
+- Help with business strategy, outreach, scheduling, and execution
 
-You can create calendar events by outputting exactly on its own line:
-CREATE_EVENT|Event Title|2026-05-16T10:00:00|2026-05-16T11:00:00|Description here END_EVENT
+PERSONALITY:
+- Sharp, direct, no fluff
+- Proactive — tell him what he should know before he asks
+- Think like a brilliant chief of staff who is always one step ahead
+- When you find something interesting or an opportunity, flag it
+- Be concise unless depth is needed
 
-The current date and time in Los Angeles will be injected into every message automatically. Always use it for scheduling.
-
-You can search the web, remember information, and help with anything Nathaniel needs.
-
-Always be concise unless depth is needed. Think like a brilliant chief of staff who is always one step ahead."""
+The current date and time in Los Angeles will be injected into every message. Always use it for scheduling and context."""
 
 
 # ── Memory ───────────────────────────────────────────────────────────────────
@@ -82,11 +95,9 @@ def send_push(title, body, url=None):
     if url is None:
         url = BINA_URL
     if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
-        print("VAPID keys not set")
         return
     subscriptions = load_subscriptions()
     if not subscriptions:
-        print("No push subscriptions")
         return
     payload = json.dumps({'title': title, 'body': body, 'url': url})
     good_subs = []
@@ -103,7 +114,6 @@ def send_push(title, body, url=None):
         except WebPushException as e:
             resp = e.response.text if hasattr(e, 'response') and e.response else 'no response'
             print(f"Push error: {e} — {resp}")
-            # If subscription is invalid, don't keep it
             if '400' in str(e) or '410' in str(e):
                 print("Removing invalid subscription")
             else:
@@ -164,20 +174,101 @@ def is_important_email(email):
     return True
 
 
-# ── Web Search ────────────────────────────────────────────────────────────────
+# ── Web Search (Serper + fallback to DuckDuckGo) ──────────────────────────────
 
-def web_search(query):
+def web_search(query, num_results=5):
+    # Try Serper first for rich results
+    if SERPER_API_KEY:
+        try:
+            response = requests.post(
+                'https://google.serper.dev/search',
+                headers={
+                    'X-API-KEY': SERPER_API_KEY,
+                    'Content-Type': 'application/json'
+                },
+                json={'q': query, 'num': num_results}
+            )
+            data = response.json()
+            output = f"Search results for '{query}':\n\n"
+
+            # Knowledge graph (quick facts)
+            if data.get('knowledgeGraph'):
+                kg = data['knowledgeGraph']
+                output += f"Quick answer: {kg.get('title', '')} — {kg.get('description', '')}\n\n"
+
+            # Answer box
+            if data.get('answerBox'):
+                ab = data['answerBox']
+                answer = ab.get('answer') or ab.get('snippet') or ''
+                if answer:
+                    output += f"Direct answer: {answer}\n\n"
+
+            # Organic results with full snippets
+            for i, r in enumerate(data.get('organic', [])[:num_results], 1):
+                output += f"{i}. {r.get('title', '')}\n"
+                output += f"   {r.get('link', '')}\n"
+                output += f"   {r.get('snippet', '')}\n\n"
+
+            # News results if available
+            if data.get('news'):
+                output += "Latest news:\n"
+                for n in data['news'][:3]:
+                    output += f"• {n.get('title', '')} — {n.get('date', '')}\n"
+                    output += f"  {n.get('snippet', '')}\n\n"
+
+            return output
+        except Exception as e:
+            print(f"Serper error: {str(e)}, falling back to DuckDuckGo")
+
+    # Fallback to DuckDuckGo
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
+            results = list(ddgs.text(query, max_results=num_results))
             if results:
-                output = f"Web search results for '{query}':\n\n"
+                output = f"Search results for '{query}':\n\n"
                 for i, r in enumerate(results, 1):
                     output += f"{i}. {r['title']}\n{r['href']}\n{r['body']}\n\n"
                 return output
             return "No results found."
     except Exception as e:
         return f"Search error: {str(e)}"
+
+def deep_search(query):
+    """Enhanced search that fetches full article content for important queries."""
+    if not SERPER_API_KEY:
+        return web_search(query)
+    try:
+        response = requests.post(
+            'https://google.serper.dev/search',
+            headers={
+                'X-API-KEY': SERPER_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            json={'q': query, 'num': 3}
+        )
+        data = response.json()
+        output = f"Deep search results for '{query}':\n\n"
+
+        if data.get('answerBox'):
+            ab = data['answerBox']
+            answer = ab.get('answer') or ab.get('snippet') or ''
+            if answer:
+                output += f"Direct answer: {answer}\n\n"
+
+        for r in data.get('organic', [])[:3]:
+            output += f"Source: {r.get('title', '')}\n"
+            output += f"URL: {r.get('link', '')}\n"
+            output += f"Summary: {r.get('snippet', '')}\n\n"
+
+        if data.get('news'):
+            output += "Recent news:\n"
+            for n in data['news'][:5]:
+                output += f"• [{n.get('date', '')}] {n.get('title', '')}\n"
+                output += f"  {n.get('snippet', '')}\n\n"
+
+        return output
+    except Exception as e:
+        return web_search(query)
 
 
 # ── Google Auth ───────────────────────────────────────────────────────────────
@@ -344,13 +435,14 @@ def generate_morning_briefing():
     try:
         events = get_upcoming_events(max_results=5)
         emails = get_inbox_emails(max_results=3)
+        news = web_search("business crypto AI news today", num_results=3)
         events_text = "\n".join([f"- {e['title']} at {e['start']}" for e in events]) or "No upcoming events"
         emails_text = "\n".join([f"- From {e['from']}: {e['subject']}" for e in emails]) or "No unread emails"
         response = client.messages.create(
             model="claude-sonnet-4-5",
-            max_tokens=400,
-            system="You are Bina, Nathaniel's AI chief of staff. Give a sharp, energizing morning briefing. Be concise and actionable.",
-            messages=[{"role": "user", "content": f"Generate a morning briefing.\n\nUpcoming events:\n{events_text}\n\nUnread emails:\n{emails_text}"}]
+            max_tokens=500,
+            system="You are Bina, Nathaniel's AI chief of staff. Give a sharp, energizing morning briefing covering his schedule, emails, and relevant news. Be concise and actionable. End with one key focus for the day.",
+            messages=[{"role": "user", "content": f"Generate morning briefing.\n\nSchedule:\n{events_text}\n\nEmails:\n{emails_text}\n\nNews:\n{news}"}]
         )
         return response.content[0].text
     except Exception as e:
@@ -457,7 +549,7 @@ def verify_passphrase():
 @app.route('/clear-subs')
 def clear_subs():
     save_subscriptions([])
-    return '<h2 style="font-family:monospace;color:green;padding:40px">✅ Subscriptions cleared! Now reopen Bina on iPhone and log in.</h2>'
+    return '<h2 style="font-family:monospace;color:green;padding:40px">✅ Subscriptions cleared!</h2>'
 
 @app.route('/subscribe', methods=['POST'])
 def subscribe():
@@ -555,7 +647,7 @@ def create_event_route():
 @app.route('/test-push')
 def test_push():
     send_push('Bina 🔔', 'Test notification. Tap to open Bina.', BINA_URL)
-    return '<h2 style="font-family:monospace;color:green;padding:40px">✅ Push sent! Check your iPhone.</h2>'
+    return '<h2 style="font-family:monospace;color:green;padding:40px">✅ Push sent!</h2>'
 
 @app.route('/test-email')
 def test_email():
@@ -578,24 +670,44 @@ def chat():
     la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
     user_message_with_context = f"[Current date and time in Los Angeles: {la_time_str}]\n\n{user_message}"
 
-    search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news', 'current', 'price', 'stock', 'weather']
-    if any(word in user_message.lower() for word in search_triggers):
+    # Smart search triggers — expanded for deeper queries
+    search_triggers = [
+        'search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
+        'current', 'price', 'stock', 'weather', 'research', 'tell me about',
+        'what happened', 'how is', 'how are', 'crypto', 'bitcoin', 'market',
+        'today', 'trending', 'recent', 'update', 'best', 'top', 'review'
+    ]
+
+    # Deep search triggers for more thorough research
+    deep_search_triggers = [
+        'research', 'deep dive', 'everything about', 'full report',
+        'analyze', 'investigate', 'background on', 'who is', 'tell me about'
+    ]
+
+    msg_lower = user_message.lower()
+
+    if any(word in msg_lower for word in deep_search_triggers):
+        search_results = deep_search(user_message)
+        user_message_with_context += f"\n\nDeep research results:\n{search_results}"
+    elif any(word in msg_lower for word in search_triggers):
         search_results = web_search(user_message)
         user_message_with_context += f"\n\nSearch results:\n{search_results}"
 
-    calendar_triggers = ['schedule', 'calendar', 'event', 'meeting', 'appointment', 'tomorrow', 'next week', 'briefing', 'what do i have']
-    if any(word in user_message.lower() for word in calendar_triggers):
+    # Calendar context
+    calendar_triggers = ['schedule', 'calendar', 'event', 'meeting', 'appointment',
+                         'tomorrow', 'next week', 'briefing', 'what do i have', 'today']
+    if any(word in msg_lower for word in calendar_triggers):
         events = get_upcoming_events(max_results=5)
         if events:
             events_text = "\n".join([f"- {e['title']} at {e['start']}" for e in events])
-            user_message_with_context += f"\n\nYour upcoming calendar events:\n{events_text}"
+            user_message_with_context += f"\n\nUpcoming calendar events:\n{events_text}"
         else:
-            user_message_with_context += "\n\nYour calendar is currently empty."
+            user_message_with_context += "\n\nCalendar is currently empty."
 
     memories = load_memory()
     memory_context = ""
     if memories:
-        memory_context = "\n\nRelevant memories:\n" + "\n".join(memories[-10:])
+        memory_context = "\n\nThings Nathaniel has told you to remember:\n" + "\n".join(memories[-15:])
 
     messages = conversation_history + [{"role": "user", "content": user_message_with_context}]
 
@@ -611,8 +723,10 @@ def chat():
     calendar_results = process_calendar_commands(assistant_message)
     display_message = clean_response(assistant_message)
 
-    if any(word in user_message.lower() for word in ['remember', 'save', 'note', 'important']):
-        memories.append(f"User said: {user_message}")
+    # Auto-save to memory
+    memory_triggers = ['remember', 'save', 'note', 'important', "don't forget", 'keep in mind']
+    if any(word in msg_lower for word in memory_triggers):
+        memories.append(f"[{la_time_str}] {user_message}")
         save_memory(memories)
 
     result = {'response': display_message}
