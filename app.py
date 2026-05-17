@@ -38,6 +38,7 @@ VAPID_CLAIMS_EMAIL = os.environ.get('VAPID_CLAIMS_EMAIL', 'mailto:nathanielwerne
 BINA_URL = 'https://my-ai-agent-production-5e17.up.railway.app'
 SERPER_API_KEY = os.environ.get('SERPER_API_KEY', '')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+ALPHA_VANTAGE_KEY = os.environ.get('ALPHA_VANTAGE_KEY', '')
 
 SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner.
 
@@ -66,7 +67,7 @@ PERSONALITY:
 - Sharp, direct, no fluff
 - Write like a smart friend texting — not a formal report
 - Be concise unless depth is needed
-- Only recommend positions when you have real data and understand the contract mechanics
+- Only recommend positions when you have verified real data
 
 The current date and time in Los Angeles will be injected into every message."""
 
@@ -257,7 +258,7 @@ def web_search(query, num_results=5):
             for r in data.get('organic', [])[:num_results]:
                 output += f"• {r.get('title', '')}: {r.get('snippet', '')}\n"
             for n in data.get('news', [])[:3]:
-                output += f"• {n.get('title', '')} ({n.get('date', '')}): {n.get('snippet', '')}\n"
+                output += f"• NEWS: {n.get('title', '')} ({n.get('date', '')}): {n.get('snippet', '')}\n"
             return output
         except Exception as e:
             print(f"Serper error: {str(e)}")
@@ -269,10 +270,54 @@ def web_search(query, num_results=5):
         return f"Search error: {str(e)}"
 
 
+# ── Real Commodity Prices via Alpha Vantage ───────────────────────────────────
+
+def get_real_commodity_prices():
+    """Get real gold and oil prices from Alpha Vantage."""
+    output = "**Commodities (Live)**\n"
+
+    if not ALPHA_VANTAGE_KEY:
+        # Fallback to search if no key yet
+        gold = web_search("gold spot price per ounce USD today", num_results=2)
+        oil = web_search("WTI crude oil price per barrel USD today", num_results=2)
+        output += f"Gold (search): {gold[:150]}\n"
+        output += f"Oil (search): {oil[:150]}\n"
+        return output
+
+    try:
+        # Gold price
+        gold_response = requests.get(
+            'https://www.alphavantage.co/query',
+            params={
+                'function': 'CURRENCY_EXCHANGE_RATE',
+                'from_currency': 'XAU',
+                'to_currency': 'USD',
+                'apikey': ALPHA_VANTAGE_KEY
+            },
+            timeout=10
+        )
+        if gold_response.status_code == 200:
+            gold_data = gold_response.json()
+            rate = gold_data.get('Realtime Currency Exchange Rate', {})
+            gold_price = rate.get('5. Exchange Rate', 'N/A')
+            output += f"🥇 **Gold**: ${float(gold_price):,.2f}/oz\n" if gold_price != 'N/A' else "🥇 Gold: unavailable\n"
+    except Exception as e:
+        output += f"🥇 Gold: error ({str(e)[:50]})\n"
+
+    try:
+        # WTI Crude Oil via search (Alpha Vantage commodity endpoint needs premium)
+        oil = web_search("WTI crude oil price per barrel USD today", num_results=2)
+        output += f"🛢️ Oil (WTI): {oil[:150]}\n"
+    except:
+        output += "🛢️ Oil: unavailable\n"
+
+    return output
+
+
 # ── Polymarket with REAL ODDS + CONTRACT MECHANICS ────────────────────────────
 
 def get_polymarket_markets_with_odds(limit=100):
-    """Get markets with YES/NO prices, resolution dates, and contract rules."""
+    """Get markets with YES/NO prices, resolution dates, rules. Filter expired."""
     try:
         response = requests.get(
             'https://gamma-api.polymarket.com/markets',
@@ -284,6 +329,7 @@ def get_polymarket_markets_with_odds(limit=100):
 
         markets = response.json()
         processed = []
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
 
         for m in markets:
             title = m.get('question', m.get('title', ''))
@@ -313,19 +359,27 @@ def get_polymarket_markets_with_odds(limit=100):
             except:
                 pass
 
-            # Resolution date
+            # Resolution date — FILTER EXPIRED MARKETS
             end_date = m.get('endDate', m.get('end_date_iso', ''))
             days_until = None
             end_date_str = 'Unknown'
+            is_expired = False
+
             if end_date:
                 try:
                     end_dt = datetime.datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                    days_until = (end_dt - datetime.datetime.now(datetime.timezone.utc)).days
+                    days_until = (end_dt - now_utc).days
                     end_date_str = end_dt.strftime('%b %d, %Y')
+                    if days_until < 0:
+                        is_expired = True  # Skip expired markets
                 except:
                     end_date_str = str(end_date)[:10]
 
-            # Contract description/rules
+            # Skip expired markets entirely
+            if is_expired:
+                continue
+
+            # Contract description
             description = ''
             if m.get('description'):
                 description = m['description'][:400]
@@ -334,14 +388,13 @@ def get_polymarket_markets_with_odds(limit=100):
             has_floor = False
             floor_description = ''
             desc_lower = description.lower()
-            title_lower = title.lower()
             if any(phrase in desc_lower for phrase in
                    ['50-50', '50/50', 'neither', 'split evenly', 'resolve 0.5',
                     'resolve at 0.5', 'push', 'no contest', '0.50']):
                 has_floor = True
-                floor_description = 'CONTRACT HAS ARTIFICIAL FLOOR — resolves 50/50 if neither event happens'
+                floor_description = 'CAPITAL TRAP — resolves 50/50 if neither event happens by deadline'
 
-            # Skip already-resolved markets
+            # Skip already-resolved or near-certain markets
             skip = False
             if yes_price is not None and (yes_price > 0.92 or yes_price < 0.08):
                 skip = True
@@ -367,7 +420,7 @@ def get_polymarket_markets_with_odds(limit=100):
         return []
 
 
-# ── Categorize Markets — Sports properly excluded ─────────────────────────────
+# ── Categorize Markets ────────────────────────────────────────────────────────
 
 def categorize_polymarket(markets):
     political = []
@@ -380,14 +433,16 @@ def categorize_polymarket(markets):
         'nhl', 'nba', 'nfl', 'mlb', 'mls', 'ufc', 'fifa', 'world cup',
         'stanley cup', 'super bowl', 'championship', 'playoffs',
         'golden knights', 'hurricanes', 'rangers', 'oilers', 'panthers',
-        'lakers', 'celtics', 'warriors', 'heat', 'knicks', 'nuggets',
-        'patriots', 'chiefs', 'eagles', 'cowboys', 'bills', '49ers',
-        'yankees', 'dodgers', 'astros', 'braves', 'mets',
+        'avalanche', 'spurs', 'lakers', 'celtics', 'warriors', 'heat',
+        'knicks', 'nuggets', 'patriots', 'chiefs', 'eagles', 'cowboys',
+        'bills', '49ers', 'yankees', 'dodgers', 'astros', 'braves', 'mets',
         'tennis', 'golf', 'formula 1', 'f1', 'boxing', 'wrestling',
         'wimbledon', 'us open', 'masters', 'olympics', 'premier league',
         'la liga', 'serie a', 'bundesliga', 'champions league',
         'win the series', 'win the finals', 'win the cup', 'win the bowl',
-        'points scored', 'total goals', 'over/under'
+        'points scored', 'total goals', 'over/under', 'nba finals',
+        'world cup', 'france win', 'spain win', 'england win',
+        'brazil win', 'argentina win', 'portugal win', 'germany win'
     ]
 
     for m in markets:
@@ -408,7 +463,7 @@ def categorize_polymarket(markets):
         elif any(w in all_text for w in [
                 'bitcoin', 'btc', 'eth', 'ethereum', 'crypto', 'solana',
                 'coin', 'token', 'defi', 'nft', 'blockchain', 'web3',
-                'altcoin', 'binance', 'coinbase']):
+                'altcoin', 'binance', 'coinbase', 'airdrop']):
             crypto_markets.append(m)
         elif any(w in all_text for w in [
                 'fed', 'federal reserve', 'interest rate', 'gdp', 'inflation',
@@ -421,7 +476,8 @@ def categorize_polymarket(markets):
                 'democrat', 'republican', 'war', 'nato', 'ukraine', 'china',
                 'iran', 'israel', 'vote', 'prime minister', 'geopolit',
                 'policy', 'government', 'minister', 'parliament', 'military',
-                'sanction', 'ceasefire', 'invasion', 'coup']):
+                'sanction', 'ceasefire', 'invasion', 'coup', 'gta vi',
+                'before gta']):
             political.append(m)
 
     for lst in [political, crypto_markets, weather, economics, sports]:
@@ -432,12 +488,47 @@ def categorize_polymarket(markets):
         'crypto': crypto_markets[:10],
         'weather': weather[:10],
         'economics': economics[:10],
-        'sports': sports[:8]
+        'sports': sports[:10]
     }
 
 
+# ── World Cup Arbitrage Calculator ────────────────────────────────────────────
+
+def calculate_sports_arb(sports_markets):
+    """Find arbitrage opportunities in sports markets like World Cup."""
+    output = ""
+
+    # Group by resolution date to find related markets
+    grouped = {}
+    for m in sports_markets:
+        end = m.get('end_date', 'Unknown')
+        if end not in grouped:
+            grouped[end] = []
+        grouped[end].append(m)
+
+    for end_date, group in grouped.items():
+        if len(group) < 3:
+            continue
+        # Calculate total YES probability
+        total_yes = sum(m.get('yes_price', 0) for m in group if m.get('yes_price'))
+        days = group[0].get('days_until_resolution', 0)
+
+        if total_yes < 0.95 and len(group) >= 4:
+            gap = 1.0 - total_yes
+            output += f"\n🎯 POTENTIAL ARB — {end_date} ({days}d left)\n"
+            output += f"Total YES across {len(group)} teams: {total_yes:.1%} (gap: {gap:.1%})\n"
+            output += "Teams:\n"
+            for m in sorted(group, key=lambda x: x.get('yes_price', 0), reverse=True)[:6]:
+                yes = m.get('yes_price', 0)
+                output += f"  • {m['title']}: YES {yes:.1%}\n"
+            if gap > 0.05:
+                output += f"  ⚡ {gap:.1%} unaccounted = potential value in field bet\n"
+
+    return output if output else ""
+
+
 def format_markets_for_analysis(categorized):
-    """Format with real odds, resolution dates, floor warnings."""
+    """Format with real odds, resolution dates, floor warnings, arb calculations."""
     output = ""
 
     def format_category(name, markets):
@@ -470,6 +561,12 @@ def format_markets_for_analysis(categorized):
     output += format_category("Weather", categorized['weather'])
     output += format_category("Economic", categorized['economics'])
     output += format_category("Sports", categorized['sports'])
+
+    # Add arb calculations for sports
+    arb = calculate_sports_arb(categorized.get('sports', []))
+    if arb:
+        output += f"\nSPORTS ARB ANALYSIS:\n{arb}"
+
     return output
 
 
@@ -526,23 +623,10 @@ def format_crypto_report(crypto_data, fear_greed):
     return output
 
 
-# ── Commodities ───────────────────────────────────────────────────────────────
-
-def get_commodities_data():
-    output = "**Commodities**\n"
-    try:
-        gold = web_search("gold price per ounce today USD spot price", num_results=2)
-        oil = web_search("WTI crude oil price today USD per barrel", num_results=2)
-        output += f"Gold: {gold[:200]}\n"
-        output += f"Oil: {oil[:200]}\n"
-    except Exception as e:
-        output += f"Unavailable: {str(e)}\n"
-    return output
-
-
-# ── Political Research ────────────────────────────────────────────────────────
+# ── Political Research with Market Connections ────────────────────────────────
 
 def research_political_news():
+    """Research political news AND connect findings to specific Polymarket markets."""
     queries = [
         "US politics breaking news today",
         "world politics major events today",
@@ -552,7 +636,8 @@ def research_political_news():
         "Middle East war news today",
         "Ukraine Russia war update today",
         "economic data inflation report today",
-        "oil gold commodity market news today"
+        "2026 midterm election news today",
+        "2028 presidential race news today"
     ]
     all_results = ""
     for query in queries:
@@ -560,6 +645,34 @@ def research_political_news():
         all_results += f"[{query}]:\n{result}\n\n"
         time.sleep(1)
     return all_results
+
+
+# ── Sports Research Before Recommending ──────────────────────────────────────
+
+def research_sports_markets(sports_markets):
+    """Actually look up current standings/results before any sports recommendation."""
+    if not sports_markets:
+        return "No sports markets."
+
+    output = "**Sports Markets — Verified Data**\n"
+    for m in sports_markets[:5]:
+        title = m['title']
+        yes = m.get('yes_price')
+        end = m.get('end_date', 'Unknown')
+        days = m.get('days_until_resolution')
+
+        # Search for actual current data
+        search_query = f"{title} current odds standings 2026"
+        result = web_search(search_query, num_results=3)
+        odds_str = f"YES: {yes:.1%}" if yes else "odds N/A"
+        days_str = f"{days}d left" if days is not None else "?"
+
+        output += f"\n• {title}\n"
+        output += f"  Polymarket: {odds_str} | Resolves: {end} ({days_str})\n"
+        output += f"  Real world data: {result[:400]}\n"
+        time.sleep(1)
+
+    return output
 
 
 # ── Weather Market Research ───────────────────────────────────────────────────
@@ -574,10 +687,10 @@ def research_weather_for_markets(weather_markets):
         no = m.get('no_price')
         end = m.get('end_date', 'Unknown')
         days = m.get('days_until_resolution')
-        result = web_search(f"weather forecast {title}", num_results=2)
+        result = web_search(f"weather forecast {title} current conditions", num_results=2)
         odds_str = f"YES: {yes:.1%} | NO: {no:.1%}" if yes else "odds N/A"
         days_str = f"{days}d left" if days is not None else "?"
-        output += f"\n• {title}\n  Odds: {odds_str} | Resolves: {end} ({days_str})\n  Forecast data: {result[:300]}\n"
+        output += f"\n• {title}\n  Odds: {odds_str} | Resolves: {end} ({days_str})\n  Forecast: {result[:300]}\n"
         time.sleep(0.5)
     return output
 
@@ -594,20 +707,22 @@ def run_overnight_research():
         'political': '',
         'weather': '',
         'commodities': '',
+        'sports': '',
         'synthesis': ''
     }
 
-    # Step 1 — Polymarket with real odds + contract mechanics
-    print("Scanning Polymarket with contract mechanics...")
+    # Step 1 — Polymarket with real odds + contract mechanics + expired filter
+    print("Scanning Polymarket...")
     try:
         markets = get_polymarket_markets_with_odds(limit=100)
         categorized = categorize_polymarket(markets)
         poly_formatted = format_markets_for_analysis(categorized)
         report['polymarket'] = poly_formatted
         report['weather_markets'] = categorized.get('weather', [])
+        report['sports_markets'] = categorized.get('sports', [])
         save_memory(f"Polymarket scan: {poly_formatted[:500]}", memory_type='research')
-        total = sum(len(v) for v in categorized.values())
-        print(f"Polymarket: {total} markets categorized")
+        total = sum(len(v) for v in categorized.values() if isinstance(v, list))
+        print(f"Polymarket: {total} valid markets")
     except Exception as e:
         report['polymarket'] = f"Polymarket unavailable: {str(e)}"
         print(f"Polymarket error: {str(e)}")
@@ -626,17 +741,17 @@ def run_overnight_research():
 
     time.sleep(5)
 
-    # Step 3 — Commodities
-    print("Getting commodities...")
+    # Step 3 — Real commodity prices
+    print("Getting real commodity prices...")
     try:
-        report['commodities'] = get_commodities_data()
+        report['commodities'] = get_real_commodity_prices()
         print("Commodities done")
     except Exception as e:
         report['commodities'] = f"Commodities unavailable: {str(e)}"
 
     time.sleep(5)
 
-    # Step 4 — Political news
+    # Step 4 — Political news connected to markets
     print("Researching political news...")
     try:
         report['political'] = research_political_news()[:3000]
@@ -646,7 +761,21 @@ def run_overnight_research():
 
     time.sleep(5)
 
-    # Step 5 — Weather markets
+    # Step 5 — Sports with verified data
+    print("Researching sports markets with real data...")
+    try:
+        sports_markets = report.get('sports_markets', [])
+        if sports_markets:
+            report['sports'] = research_sports_markets(sports_markets[:4])
+        else:
+            report['sports'] = "No active sports markets found."
+        print("Sports done")
+    except Exception as e:
+        report['sports'] = f"Sports unavailable: {str(e)}"
+
+    time.sleep(5)
+
+    # Step 6 — Weather markets
     print("Researching weather markets...")
     try:
         weather_markets = report.get('weather_markets', [])
@@ -657,57 +786,57 @@ def run_overnight_research():
 
     time.sleep(10)
 
-    # Step 6 — Synthesize with Claude
+    # Step 7 — Synthesize with Claude — strict rules
     print("Synthesizing...")
     try:
         synthesis_prompt = f"""You are Bina, texting Nathaniel (18, Beverly Hills) his morning intelligence report.
 
-CRITICAL RULES — break these and the report is worthless:
-1. NEVER recommend a position without stating the exact resolution date
-2. NEVER recommend YES/NO on markets already above 90% or below 10% — no edge
-3. If a market has an ARTIFICIAL FLOOR (like GTA6/Bitcoin that resolves 50/50 if neither happens by deadline), explain this mechanic clearly. These are NOT normal bets — they lock up capital for near-zero expected return. Flag them as traps unless there's a specific reason to think the underlying event will actually happen before the deadline
-4. ONLY recommend positions where you can explain WHY the current price is WRONG based on real data
-5. Resolution date matters massively — a 45% YES expiring in 3 days is completely different from 45% YES expiring in 8 months
-6. For crypto recommendations, state current price, required move percentage, and realistic timeframe
+STRICT RULES — violate these and the report is worthless:
+1. NEVER recommend any position without the exact resolution date stated
+2. NEVER recommend markets above 90% or below 10% YES — no edge
+3. NEVER recommend "before GTA VI" markets — they are capital traps with artificial 50/50 floors. Explain this once briefly and move on
+4. NEVER quote a price (gold, oil, stock) without it coming from the verified data below. If you don't have a verified number, say "price unavailable" — do NOT invent numbers
+5. For sports calls, you MUST reference the verified real-world data provided — not vibes or assumptions
+6. If there's a World Cup or multi-team arb opportunity identified in the data, complete the full math — don't say "need more data" when the data is right there
+7. Connect political news to specific markets — don't just list news, say "this news means market X at Y% is now mispriced because..."
+8. Keep total response under 400 words
 
 DATA:
 
-POLYMARKET WITH CONTRACT MECHANICS + RESOLUTION DATES:
+POLYMARKET WITH CONTRACT MECHANICS + ARB ANALYSIS:
 {report['polymarket']}
 
 CRYPTO:
 {report['crypto']}
 
-COMMODITIES:
+COMMODITIES (verified prices):
 {report['commodities']}
 
 POLITICAL NEWS:
 {report['political'][:1500]}
 
-WEATHER MARKETS:
-{report['weather'][:800]}
+SPORTS MARKETS WITH VERIFIED REAL-WORLD DATA:
+{report['sports'][:1000]}
 
-Write like a smart friend texting. **Bold** key numbers. Under 400 words.
+WEATHER MARKETS:
+{report['weather'][:500]}
+
+Write like a smart friend texting. **Bold** key numbers. No fake opening like "yo" — just get straight to it.
 
 ## What I found overnight
-Single most interesting genuine opportunity you found.
+Single most actionable genuine opportunity — specific, verified.
 
-## Top plays (real edges only)
-For each:
-- Exact market or asset name
-- Current price/odds + resolution date
-- Position: YES/NO/BUY/SELL
-- Confidence: HIGH/MEDIUM/LOW
-- Why the price is wrong — specific data, not vibes
+## Top plays (verified edges only)
+For each play include: exact market, current odds, resolution date, position, confidence, why the price is wrong using actual data from above.
 
-## Weather play
-If any weather market has forecast data that disagrees with current odds, flag it with actual numbers.
+## Sports arb (if applicable)
+If arb data shows a gap in World Cup or other multi-team market, complete the math and give the play.
 
 ## Watch today
-2-3 specific events next 24h that create windows.
+2-3 specific events in next 24h that create market windows. For each, name the specific Polymarket market it affects.
 
 ## The edge
-One non-obvious contrarian insight from the data."""
+One non-obvious contrarian insight backed by verified numbers."""
 
         response = client.messages.create(
             model="claude-sonnet-4-5",
@@ -723,7 +852,7 @@ One non-obvious contrarian insight from the data."""
 
     # Save to file
     try:
-        save_data = {k: v for k, v in report.items() if k != 'weather_markets'}
+        save_data = {k: v for k, v in report.items() if k not in ['weather_markets', 'sports_markets']}
         with open(OVERNIGHT_REPORT_FILE, 'w') as f:
             json.dump(save_data, f)
         print("Report saved")
@@ -1172,10 +1301,12 @@ def chat():
         categorized = categorize_polymarket(markets)
         user_message_with_context += f"\n\nLive Polymarket:\n{format_markets_for_analysis(categorized)}"
 
+    if any(word in msg_lower for word in ['gold', 'oil', 'commodity', 'commodities']):
+        user_message_with_context += f"\n\nCommodities:\n{get_real_commodity_prices()}"
+
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'stock', 'weather', 'research', 'tell me about', 'what happened',
-                       'today', 'trending', 'recent', 'update', 'best', 'top', 'political', 'politics',
-                       'gold', 'oil', 'commodity']
+                       'today', 'trending', 'recent', 'update', 'best', 'top', 'political', 'politics']
     deep_triggers = ['research', 'deep dive', 'everything about', 'full report', 'analyze',
                      'investigate', 'background on', 'tell me about']
 
