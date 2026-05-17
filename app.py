@@ -40,15 +40,16 @@ SERPER_API_KEY = os.environ.get('SERPER_API_KEY', '')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 ALPHA_VANTAGE_KEY = os.environ.get('ALPHA_VANTAGE_KEY', '')
 FRED_API_KEY = os.environ.get('FRED_API_KEY', '')
+NEWS_API_KEY = os.environ.get('NEWS_API_KEY', '')
 
 SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner.
 
 ABOUT NATHANIEL:
 - 18 years old, college student in Beverly Hills
 - Entrepreneur focused on building autonomous income systems
-- Interested in crypto, investments, Polymarket, Kalshi, TikTok/content, business automation
+- Interested in crypto, investments, Polymarket, Kalshi, sports betting, world politics
 - Watches: Bitcoin, Ethereum, Solana, Chainlink, Render
-- Interested in US politics, world politics, prediction markets, weather markets, commodities
+- Interested in US politics, world politics, prediction markets, sports markets
 - Building toward financial freedom and passive income
 - Direct, ambitious, moves fast, hates wasted time
 - Jewish background (uses Hebrew greetings occasionally)
@@ -60,6 +61,7 @@ YOUR CAPABILITIES:
 - Send emails: SEND_EMAIL|to@email.com|Subject|Body END_EMAIL
 - Create calendar events: CREATE_EVENT|Title|2026-05-17T10:00:00|2026-05-17T11:00:00|Description END_EVENT
 - Deep web search, persistent memory, live crypto/Polymarket/Kalshi/commodities/economic data
+- Real-time news monitoring via dedicated research worker running 24/7
 
 CRITICAL MEMORY INSTRUCTIONS:
 Reference memories naturally. Never ignore relevant memories.
@@ -259,7 +261,7 @@ def web_search(query, num_results=5):
             for r in data.get('organic', [])[:num_results]:
                 output += f"• {r.get('title', '')}: {r.get('snippet', '')}\n"
             for n in data.get('news', [])[:3]:
-                output += f"• NEWS: {n.get('title', '')} ({n.get('date', '')}): {n.get('snippet', '')}\n"
+                output += f"• NEWS ({n.get('date', '')}): {n.get('title', '')} — {n.get('snippet', '')}\n"
             return output
         except Exception as e:
             print(f"Serper error: {str(e)}")
@@ -271,351 +273,7 @@ def web_search(query, num_results=5):
         return f"Search error: {str(e)}"
 
 
-# ── KALSHI (public API, no key needed) ───────────────────────────────────────
-
-def get_kalshi_markets(limit=50):
-    """Pull Kalshi markets — free public API, no auth needed for reading."""
-    try:
-        response = requests.get(
-            'https://api.elections.kalshi.com/trade-api/v2/markets',
-            params={'limit': limit, 'status': 'open'},
-            headers={'Accept': 'application/json'},
-            timeout=15
-        )
-        if response.status_code == 200:
-            data = response.json()
-            markets = data.get('markets', [])
-            processed = []
-            now_utc = datetime.datetime.now(datetime.timezone.utc)
-
-            for m in markets:
-                close_time = m.get('close_time', '')
-                days_until = None
-                end_date_str = 'Unknown'
-                if close_time:
-                    try:
-                        end_dt = datetime.datetime.fromisoformat(close_time.replace('Z', '+00:00'))
-                        days_until = (end_dt - now_utc).days
-                        end_date_str = end_dt.strftime('%b %d, %Y')
-                        if days_until < 0:
-                            continue
-                    except:
-                        pass
-
-                yes_price = m.get('yes_bid', m.get('last_price', None))
-                if yes_price is not None:
-                    yes_price = yes_price / 100  # Kalshi uses cents
-
-                volume = m.get('volume', 0) or 0
-
-                processed.append({
-                    'title': m.get('title', ''),
-                    'subtitle': m.get('subtitle', ''),
-                    'yes_price': yes_price,
-                    'no_price': (1 - yes_price) if yes_price else None,
-                    'volume': volume,
-                    'end_date': end_date_str,
-                    'days_until': days_until,
-                    'category': m.get('category', ''),
-                    'ticker': m.get('ticker_name', '')
-                })
-
-            return processed
-        print(f"Kalshi API status: {response.status_code}")
-        return []
-    except Exception as e:
-        print(f"Kalshi error: {str(e)}")
-        return []
-
-def cross_reference_markets(polymarket_markets, kalshi_markets):
-    """Find same events priced differently on Polymarket vs Kalshi."""
-    if not polymarket_markets or not kalshi_markets:
-        return ""
-
-    output = "\n**POLYMARKET vs KALSHI CROSS-REFERENCE:**\n"
-    discrepancies = []
-
-    # Keywords to match similar markets
-    for pm in polymarket_markets[:30]:
-        pm_title = pm['title'].lower()
-        pm_yes = pm.get('yes_price')
-        if not pm_yes:
-            continue
-
-        for km in kalshi_markets[:50]:
-            km_title = (km['title'] + ' ' + km.get('subtitle', '')).lower()
-            km_yes = km.get('yes_price')
-            if not km_yes:
-                continue
-
-            # Check for keyword overlap
-            pm_words = set(pm_title.split())
-            km_words = set(km_title.split())
-            overlap = pm_words & km_words
-            significant_overlap = [w for w in overlap if len(w) > 4]
-
-            if len(significant_overlap) >= 2:
-                diff = abs(pm_yes - km_yes)
-                if diff > 0.05:  # Only flag if >5% difference
-                    discrepancies.append({
-                        'pm_title': pm['title'],
-                        'km_title': km['title'],
-                        'pm_yes': pm_yes,
-                        'km_yes': km_yes,
-                        'diff': diff,
-                        'pm_end': pm.get('end_date', '?'),
-                        'km_end': km.get('end_date', '?')
-                    })
-
-    if discrepancies:
-        discrepancies.sort(key=lambda x: x['diff'], reverse=True)
-        output += f"Found {len(discrepancies)} potential discrepancies:\n"
-        for d in discrepancies[:5]:
-            direction = "Polymarket HIGHER" if d['pm_yes'] > d['km_yes'] else "Kalshi HIGHER"
-            output += f"\n⚡ PRICE GAP: {d['diff']:.1%} — {direction}\n"
-            output += f"  Polymarket: '{d['pm_title']}' → YES {d['pm_yes']:.1%} (resolves {d['pm_end']})\n"
-            output += f"  Kalshi:     '{d['km_title']}' → YES {d['km_yes']:.1%} (resolves {d['km_end']})\n"
-    else:
-        output += "No significant price gaps found between platforms.\n"
-
-    return output
-
-def format_kalshi_markets(markets):
-    """Format top Kalshi markets by category."""
-    if not markets:
-        return "Kalshi data unavailable."
-
-    output = "**Kalshi Markets (Top by Volume)**\n"
-    by_category = {}
-    for m in markets:
-        cat = m.get('category', 'Other') or 'Other'
-        if cat not in by_category:
-            by_category[cat] = []
-        by_category[cat].append(m)
-
-    priority_cats = ['Politics', 'Economics', 'Climate', 'Crypto', 'Sports']
-    for cat in priority_cats:
-        if cat in by_category:
-            output += f"\n{cat.upper()}:\n"
-            sorted_markets = sorted(by_category[cat], key=lambda x: x.get('volume', 0), reverse=True)
-            for m in sorted_markets[:4]:
-                yes = m.get('yes_price')
-                vol = m.get('volume', 0)
-                end = m.get('end_date', '?')
-                days = m.get('days_until')
-                days_str = f"{days}d" if days is not None else "?"
-                if yes:
-                    output += f"• {m['title']}\n  YES: {yes:.1%} | Vol: {vol:,} | Resolves: {end} ({days_str})\n"
-
-    return output
-
-
-# ── METACULUS (free, no key needed) ──────────────────────────────────────────
-
-def get_metaculus_questions(limit=20):
-    """Pull top forecaster predictions from Metaculus — completely free."""
-    try:
-        response = requests.get(
-            'https://www.metaculus.com/api2/questions/',
-            params={
-                'limit': limit,
-                'status': 'open',
-                'order_by': '-activity',
-                'type': 'forecast'
-            },
-            headers={'Accept': 'application/json'},
-            timeout=15
-        )
-        if response.status_code == 200:
-            data = response.json()
-            questions = []
-            for q in data.get('results', []):
-                community = q.get('community_prediction', {})
-                prediction = None
-                if community:
-                    prediction = community.get('full', {}).get('q2')
-
-                questions.append({
-                    'title': q.get('title', ''),
-                    'prediction': prediction,
-                    'resolution_date': q.get('resolution', '')[:10] if q.get('resolution') else 'Unknown',
-                    'forecasters': q.get('number_of_predictions', 0),
-                    'url': f"https://metaculus.com/questions/{q.get('id', '')}"
-                })
-            return questions
-        return []
-    except Exception as e:
-        print(f"Metaculus error: {str(e)}")
-        return []
-
-def format_metaculus(questions):
-    """Format Metaculus predictions — these are expert forecasters, not money traders."""
-    if not questions:
-        return "Metaculus data unavailable."
-
-    output = "**Metaculus Expert Forecasts** (community of superforecasters)\n"
-    for q in questions[:8]:
-        pred = q.get('prediction')
-        forecasters = q.get('forecasters', 0)
-        res_date = q.get('resolution_date', '?')
-        if pred is not None:
-            output += f"• {q['title']}\n  Forecast: **{pred:.1%}** | {forecasters} forecasters | Resolves: {res_date}\n"
-        else:
-            output += f"• {q['title']} | Resolves: {res_date}\n"
-    return output
-
-def cross_reference_metaculus_polymarket(metaculus_questions, polymarket_markets):
-    """Find where expert forecasters disagree with Polymarket money."""
-    if not metaculus_questions or not polymarket_markets:
-        return ""
-
-    output = "\n**METACULUS vs POLYMARKET — Expert vs Money:**\n"
-    gaps = []
-
-    for mq in metaculus_questions:
-        mq_title = mq['title'].lower()
-        mq_pred = mq.get('prediction')
-        if not mq_pred:
-            continue
-
-        for pm in polymarket_markets[:30]:
-            pm_title = pm['title'].lower()
-            pm_yes = pm.get('yes_price')
-            if not pm_yes:
-                continue
-
-            mq_words = set(mq_title.split())
-            pm_words = set(pm_title.split())
-            overlap = [w for w in (mq_words & pm_words) if len(w) > 4]
-
-            if len(overlap) >= 2:
-                diff = abs(mq_pred - pm_yes)
-                if diff > 0.08:
-                    gaps.append({
-                        'mq_title': mq['title'],
-                        'pm_title': pm['title'],
-                        'mq_pred': mq_pred,
-                        'pm_yes': pm_yes,
-                        'diff': diff,
-                        'forecasters': mq.get('forecasters', 0),
-                        'direction': 'Experts HIGHER' if mq_pred > pm_yes else 'Market HIGHER'
-                    })
-
-    if gaps:
-        gaps.sort(key=lambda x: x['diff'], reverse=True)
-        output += f"Found {len(gaps)} expert/market disagreements:\n"
-        for g in gaps[:3]:
-            output += f"\n⚡ {g['diff']:.1%} gap — {g['direction']}\n"
-            output += f"  Metaculus ({g['forecasters']} forecasters): {g['mq_pred']:.1%} — '{g['mq_title']}'\n"
-            output += f"  Polymarket money: {g['pm_yes']:.1%} — '{g['pm_title']}'\n"
-    else:
-        output += "No significant expert/market disagreements found.\n"
-
-    return output
-
-
-# ── FRED Economic Data (free, just needs key) ─────────────────────────────────
-
-def get_fred_data():
-    """Get real economic indicators from Federal Reserve."""
-    if not FRED_API_KEY:
-        return "FRED API key not configured — add FRED_API_KEY to Railway."
-
-    indicators = {
-        'FEDFUNDS': 'Fed Funds Rate',
-        'CPIAUCSL': 'CPI Inflation',
-        'UNRATE': 'Unemployment Rate',
-        'DGS10': '10-Year Treasury Yield',
-        'DCOILWTICO': 'WTI Oil Price',
-        'GOLDAMGBD228NLBM': 'Gold Price (London Fix)'
-    }
-
-    output = "**FRED Economic Indicators (Federal Reserve Data)**\n"
-    for series_id, name in indicators.items():
-        try:
-            response = requests.get(
-                'https://api.stlouisfed.org/fred/series/observations',
-                params={
-                    'series_id': series_id,
-                    'api_key': FRED_API_KEY,
-                    'file_type': 'json',
-                    'limit': 1,
-                    'sort_order': 'desc'
-                },
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                obs = data.get('observations', [])
-                if obs:
-                    value = obs[0].get('value', 'N/A')
-                    date = obs[0].get('date', '')
-                    if value != '.':
-                        output += f"• **{name}**: {value} (as of {date})\n"
-            time.sleep(0.3)
-        except Exception as e:
-            output += f"• {name}: unavailable\n"
-
-    return output
-
-
-# ── Real Commodity Prices via Alpha Vantage ───────────────────────────────────
-
-def get_real_commodity_prices():
-    output = "**Commodities**\n"
-
-    if ALPHA_VANTAGE_KEY:
-        try:
-            gold_response = requests.get(
-                'https://www.alphavantage.co/query',
-                params={
-                    'function': 'CURRENCY_EXCHANGE_RATE',
-                    'from_currency': 'XAU',
-                    'to_currency': 'USD',
-                    'apikey': ALPHA_VANTAGE_KEY
-                },
-                timeout=10
-            )
-            if gold_response.status_code == 200:
-                rate = gold_response.json().get('Realtime Currency Exchange Rate', {})
-                gold_price = rate.get('5. Exchange Rate', None)
-                if gold_price:
-                    output += f"🥇 **Gold**: ${float(gold_price):,.2f}/oz\n"
-                else:
-                    output += "🥇 Gold: unavailable\n"
-        except Exception as e:
-            output += f"🥇 Gold: error\n"
-
-        try:
-            oil_response = requests.get(
-                'https://www.alphavantage.co/query',
-                params={
-                    'function': 'BRENT',
-                    'interval': 'daily',
-                    'apikey': ALPHA_VANTAGE_KEY
-                },
-                timeout=10
-            )
-            if oil_response.status_code == 200:
-                data = oil_response.json()
-                series = data.get('data', [])
-                if series:
-                    latest = series[0]
-                    output += f"🛢️ **Brent Oil**: ${float(latest.get('value', 0)):,.2f}/barrel (as of {latest.get('date', '?')})\n"
-                else:
-                    output += "🛢️ Oil: unavailable\n"
-        except Exception as e:
-            output += f"🛢️ Oil: error\n"
-    else:
-        gold = web_search("gold spot price per ounce USD today", num_results=1)
-        oil = web_search("WTI crude oil price per barrel USD today", num_results=1)
-        output += f"🥇 Gold (search): {gold[:150]}\n"
-        output += f"🛢️ Oil (search): {oil[:150]}\n"
-
-    return output
-
-
-# ── Polymarket with REAL ODDS + CONTRACT MECHANICS ────────────────────────────
+# ── Polymarket ────────────────────────────────────────────────────────────────
 
 def get_polymarket_markets_with_odds(limit=100):
     try:
@@ -677,18 +335,9 @@ def get_polymarket_markets_with_odds(limit=100):
                 continue
 
             description = m.get('description', '')[:400] if m.get('description') else ''
-
-            has_floor = False
-            floor_description = ''
-            if description and any(phrase in description.lower() for phrase in
-                   ['50-50', '50/50', 'neither', 'split evenly', 'resolve 0.5',
-                    'resolve at 0.5', 'push', 'no contest', '0.50']):
-                has_floor = True
-                floor_description = 'CAPITAL TRAP — resolves 50/50 if neither event happens by deadline'
-
-            skip = False
-            if yes_price is not None and (yes_price > 0.92 or yes_price < 0.08):
-                skip = True
+            has_floor = any(phrase in description.lower() for phrase in
+                           ['50-50', '50/50', 'neither', 'split evenly', 'resolve 0.5', '0.50'])
+            skip = bool(yes_price and (yes_price > 0.92 or yes_price < 0.08))
 
             processed.append({
                 'title': title,
@@ -699,7 +348,6 @@ def get_polymarket_markets_with_odds(limit=100):
                 'days_until_resolution': days_until,
                 'description': description,
                 'has_floor': has_floor,
-                'floor_description': floor_description,
                 'skip': skip,
                 'tags': [t.get('label', '') if isinstance(t, dict) else str(t)
                          for t in (m.get('tags') or [])],
@@ -710,7 +358,6 @@ def get_polymarket_markets_with_odds(limit=100):
         print(f"Polymarket error: {str(e)}")
         return []
 
-
 def categorize_polymarket(markets):
     political = []
     crypto_markets = []
@@ -720,17 +367,14 @@ def categorize_polymarket(markets):
 
     SPORTS_KEYWORDS = [
         'nhl', 'nba', 'nfl', 'mlb', 'mls', 'ufc', 'fifa', 'world cup',
-        'stanley cup', 'super bowl', 'championship', 'playoffs',
-        'golden knights', 'hurricanes', 'rangers', 'oilers', 'panthers',
-        'avalanche', 'spurs', 'lakers', 'celtics', 'warriors', 'heat',
-        'knicks', 'nuggets', 'patriots', 'chiefs', 'eagles', 'cowboys',
-        'bills', '49ers', 'yankees', 'dodgers', 'astros', 'braves', 'mets',
-        'tennis', 'golf', 'formula 1', 'f1', 'boxing', 'wrestling',
-        'wimbledon', 'us open', 'masters', 'olympics', 'premier league',
-        'la liga', 'serie a', 'bundesliga', 'champions league',
-        'win the series', 'win the finals', 'win the cup', 'win the bowl',
-        'nba finals', 'france win', 'spain win', 'england win',
-        'brazil win', 'argentina win', 'portugal win', 'germany win'
+        'stanley cup', 'super bowl', 'championship', 'playoffs', 'avalanche',
+        'spurs', 'lakers', 'celtics', 'warriors', 'heat', 'knicks', 'nuggets',
+        'patriots', 'chiefs', 'eagles', 'cowboys', 'bills', '49ers',
+        'yankees', 'dodgers', 'astros', 'braves', 'mets', 'tennis', 'golf',
+        'formula 1', 'f1', 'boxing', 'wrestling', 'wimbledon', 'us open',
+        'masters', 'olympics', 'premier league', 'la liga', 'serie a',
+        'bundesliga', 'champions league', 'nba finals', 'france win',
+        'spain win', 'england win', 'brazil win', 'argentina win', 'portugal win'
     ]
 
     for m in markets:
@@ -743,29 +387,25 @@ def categorize_polymarket(markets):
         if any(w in all_text for w in SPORTS_KEYWORDS):
             sports.append(m)
         elif any(w in all_text for w in [
-                'weather', 'temperature', 'rain', 'snow', 'hurricane named',
-                'tornado', 'flood', 'storm', 'celsius', 'fahrenheit',
-                'precipitation', 'drought', 'wildfire', 'earthquake',
-                'typhoon', 'blizzard', 'inches of', 'degrees']):
+                'weather', 'temperature', 'rain', 'snow', 'tornado',
+                'flood', 'storm', 'precipitation', 'drought', 'wildfire',
+                'earthquake', 'typhoon', 'blizzard']):
             weather.append(m)
         elif any(w in all_text for w in [
                 'bitcoin', 'btc', 'eth', 'ethereum', 'crypto', 'solana',
-                'coin', 'token', 'defi', 'nft', 'blockchain', 'web3',
-                'altcoin', 'binance', 'coinbase', 'airdrop']):
+                'coin', 'token', 'defi', 'nft', 'blockchain', 'airdrop']):
             crypto_markets.append(m)
         elif any(w in all_text for w in [
                 'fed', 'federal reserve', 'interest rate', 'gdp', 'inflation',
-                'recession', 'oil price', 'gold price', 'stock market',
-                'nasdaq', 's&p', 'dow jones', 'unemployment', 'cpi',
-                'jobs report', 'treasury', 'yield', 'tariff', 'trade deal']):
+                'recession', 'oil price', 'gold price', 'nasdaq', 's&p',
+                'unemployment', 'cpi', 'treasury', 'yield', 'tariff']):
             economics.append(m)
         elif any(w in all_text for w in [
                 'president', 'election', 'congress', 'senate', 'trump', 'biden',
                 'democrat', 'republican', 'war', 'nato', 'ukraine', 'china',
                 'iran', 'israel', 'vote', 'prime minister', 'geopolit',
                 'policy', 'government', 'minister', 'parliament', 'military',
-                'sanction', 'ceasefire', 'invasion', 'coup', 'gta vi',
-                'before gta']):
+                'sanction', 'ceasefire', 'invasion', 'coup']):
             political.append(m)
 
     for lst in [political, crypto_markets, weather, economics, sports]:
@@ -779,7 +419,6 @@ def categorize_polymarket(markets):
         'sports': sports[:10]
     }
 
-
 def calculate_sports_arb(sports_markets):
     output = ""
     grouped = {}
@@ -788,7 +427,6 @@ def calculate_sports_arb(sports_markets):
         if end not in grouped:
             grouped[end] = []
         grouped[end].append(m)
-
     for end_date, group in grouped.items():
         if len(group) < 3:
             continue
@@ -796,14 +434,13 @@ def calculate_sports_arb(sports_markets):
         days = group[0].get('days_until_resolution', 0)
         if total_yes < 0.95 and len(group) >= 4:
             gap = 1.0 - total_yes
-            output += f"\n🎯 ARB OPPORTUNITY — {end_date} ({days}d left)\n"
+            output += f"\n🎯 ARB — {end_date} ({days}d left)\n"
             output += f"Total YES: {total_yes:.1%} across {len(group)} outcomes (gap: {gap:.1%})\n"
             for m in sorted(group, key=lambda x: x.get('yes_price', 0), reverse=True)[:6]:
                 output += f"  • {m['title']}: YES {m.get('yes_price', 0):.1%}\n"
             if gap > 0.05:
-                output += f"  ⚡ Buy the field — {gap:.1%} expected value gap\n"
+                output += f"  ⚡ Field bet has {gap:.1%} EV gap\n"
     return output
-
 
 def format_markets_for_analysis(categorized):
     output = ""
@@ -819,14 +456,12 @@ def format_markets_for_analysis(categorized):
             end = m.get('end_date', 'Unknown')
             days = m.get('days_until_resolution')
             has_floor = m.get('has_floor', False)
-            floor_desc = m.get('floor_description', '')
             days_str = f"{days}d left" if days is not None else "?"
-
             if yes is not None:
                 result += f"• {m['title']}\n"
                 result += f"  YES: {yes:.1%} | NO: {no:.1%} | Vol: ${vol:,.0f} | Resolves: {end} ({days_str})\n"
                 if has_floor:
-                    result += f"  ⚠️ {floor_desc}\n"
+                    result += f"  ⚠️ CAPITAL TRAP — resolves 50/50 if neither event happens\n"
                 if m.get('description'):
                     result += f"  Rules: {m['description'][:100]}\n"
             else:
@@ -838,11 +473,9 @@ def format_markets_for_analysis(categorized):
     output += format_category("Weather", categorized['weather'])
     output += format_category("Economic", categorized['economics'])
     output += format_category("Sports", categorized['sports'])
-
     arb = calculate_sports_arb(categorized.get('sports', []))
     if arb:
-        output += f"\nSPORTS ARB ANALYSIS:\n{arb}"
-
+        output += f"\nSPORTS ARB:\n{arb}"
     return output
 
 
@@ -857,7 +490,6 @@ def get_crypto_data():
                 'vs_currencies': 'usd',
                 'include_24hr_change': 'true',
                 'include_24hr_vol': 'true',
-                'include_market_cap': 'true'
             },
             timeout=10
         )
@@ -899,368 +531,166 @@ def format_crypto_report(crypto_data, fear_greed):
     return output
 
 
-# ── Political Research ────────────────────────────────────────────────────────
+# ── Commodities ───────────────────────────────────────────────────────────────
 
-def research_political_news():
-    queries = [
-        "US politics breaking news today",
-        "world politics major events today",
-        "Federal Reserve interest rate decision news",
-        "Trump policy announcement today",
-        "China US trade geopolitical news today",
-        "Middle East war news today",
-        "Ukraine Russia war update today",
-        "economic data inflation report today",
-        "2026 midterm election news today",
-        "2028 presidential race news today"
-    ]
-    all_results = ""
-    for query in queries:
-        result = web_search(query, num_results=2)
-        all_results += f"[{query}]:\n{result}\n\n"
-        time.sleep(1)
-    return all_results
-
-
-# ── Sports Research ───────────────────────────────────────────────────────────
-
-def research_sports_markets(sports_markets):
-    if not sports_markets:
-        return "No sports markets."
-    output = "**Sports Markets — Verified Data**\n"
-    for m in sports_markets[:4]:
-        title = m['title']
-        yes = m.get('yes_price')
-        end = m.get('end_date', 'Unknown')
-        days = m.get('days_until_resolution')
-        result = web_search(f"{title} current odds standings 2026", num_results=3)
-        odds_str = f"YES: {yes:.1%}" if yes else "odds N/A"
-        days_str = f"{days}d left" if days is not None else "?"
-        output += f"\n• {title}\n  Polymarket: {odds_str} | Resolves: {end} ({days_str})\n  Real data: {result[:400]}\n"
-        time.sleep(1)
+def get_real_commodity_prices():
+    output = "**Commodities**\n"
+    if ALPHA_VANTAGE_KEY:
+        try:
+            gold_response = requests.get(
+                'https://www.alphavantage.co/query',
+                params={'function': 'CURRENCY_EXCHANGE_RATE', 'from_currency': 'XAU',
+                        'to_currency': 'USD', 'apikey': ALPHA_VANTAGE_KEY},
+                timeout=10
+            )
+            if gold_response.status_code == 200:
+                rate = gold_response.json().get('Realtime Currency Exchange Rate', {})
+                gold_price = rate.get('5. Exchange Rate', None)
+                if gold_price:
+                    output += f"🥇 **Gold**: ${float(gold_price):,.2f}/oz\n"
+        except:
+            pass
+        try:
+            oil_response = requests.get(
+                'https://www.alphavantage.co/query',
+                params={'function': 'BRENT', 'interval': 'daily', 'apikey': ALPHA_VANTAGE_KEY},
+                timeout=10
+            )
+            if oil_response.status_code == 200:
+                series = oil_response.json().get('data', [])
+                if series:
+                    output += f"🛢️ **Brent Oil**: ${float(series[0].get('value', 0)):,.2f}/barrel\n"
+        except:
+            pass
+    else:
+        output += web_search("gold price oil price today USD", num_results=2)[:200]
     return output
 
 
-# ── Weather Research ──────────────────────────────────────────────────────────
+# ── FRED ──────────────────────────────────────────────────────────────────────
 
-def research_weather_for_markets(weather_markets):
-    if not weather_markets:
-        return "No weather markets found."
-    output = "**Weather Market Research**\n"
-    for m in weather_markets[:5]:
-        title = m['title']
-        yes = m.get('yes_price')
-        no = m.get('no_price')
-        end = m.get('end_date', 'Unknown')
-        days = m.get('days_until_resolution')
-        result = web_search(f"weather forecast {title} current conditions", num_results=2)
-        odds_str = f"YES: {yes:.1%} | NO: {no:.1%}" if yes else "odds N/A"
-        days_str = f"{days}d left" if days is not None else "?"
-        output += f"\n• {title}\n  Odds: {odds_str} | Resolves: {end} ({days_str})\n  Forecast: {result[:300]}\n"
-        time.sleep(0.5)
-    return output
-
-
-# ── Overnight Research ────────────────────────────────────────────────────────
-
-def run_overnight_research():
-    print("Starting overnight research...")
-    report = {
-        'date': datetime.datetime.now().strftime('%Y-%m-%d'),
-        'time': datetime.datetime.now().strftime('%H:%M'),
-        'polymarket': '',
-        'kalshi': '',
-        'cross_reference': '',
-        'metaculus': '',
-        'metaculus_vs_poly': '',
-        'crypto': '',
-        'political': '',
-        'weather': '',
-        'commodities': '',
-        'fred': '',
-        'sports': '',
-        'synthesis': ''
+def get_fred_data():
+    if not FRED_API_KEY:
+        return "FRED key not configured."
+    indicators = {
+        'FEDFUNDS': 'Fed Funds Rate',
+        'CPIAUCSL': 'CPI Inflation',
+        'UNRATE': 'Unemployment Rate',
+        'DGS10': '10-Year Treasury',
+        'DCOILWTICO': 'WTI Oil'
     }
+    output = "**FRED Economic Data**\n"
+    for series_id, name in indicators.items():
+        try:
+            response = requests.get(
+                'https://api.stlouisfed.org/fred/series/observations',
+                params={'series_id': series_id, 'api_key': FRED_API_KEY,
+                        'file_type': 'json', 'limit': 1, 'sort_order': 'desc'},
+                timeout=10
+            )
+            if response.status_code == 200:
+                obs = response.json().get('observations', [])
+                if obs and obs[0].get('value') != '.':
+                    output += f"• **{name}**: {obs[0]['value']} ({obs[0]['date']})\n"
+            time.sleep(0.3)
+        except:
+            pass
+    return output
 
-    # Polymarket
-    print("Scanning Polymarket...")
+
+# ── Kalshi ────────────────────────────────────────────────────────────────────
+
+def get_kalshi_markets(limit=50):
     try:
-        markets = get_polymarket_markets_with_odds(limit=100)
-        categorized = categorize_polymarket(markets)
-        poly_formatted = format_markets_for_analysis(categorized)
-        report['polymarket'] = poly_formatted
-        report['weather_markets'] = categorized.get('weather', [])
-        report['sports_markets'] = categorized.get('sports', [])
-        report['all_poly_markets'] = markets
-        total = sum(len(v) for v in categorized.values() if isinstance(v, list))
-        print(f"Polymarket: {total} markets")
-    except Exception as e:
-        report['polymarket'] = f"Polymarket unavailable: {str(e)}"
-
-    time.sleep(5)
-
-    # Kalshi
-    print("Scanning Kalshi...")
-    try:
-        kalshi_markets = get_kalshi_markets(limit=100)
-        report['kalshi'] = format_kalshi_markets(kalshi_markets)
-        report['kalshi_raw'] = kalshi_markets
-
-        # Cross-reference with Polymarket
-        all_poly = report.get('all_poly_markets', [])
-        if all_poly and kalshi_markets:
-            report['cross_reference'] = cross_reference_markets(all_poly, kalshi_markets)
-        print(f"Kalshi: {len(kalshi_markets)} markets")
-    except Exception as e:
-        report['kalshi'] = f"Kalshi unavailable: {str(e)}"
-        print(f"Kalshi error: {str(e)}")
-
-    time.sleep(5)
-
-    # Metaculus
-    print("Getting Metaculus forecasts...")
-    try:
-        metaculus_questions = get_metaculus_questions(limit=20)
-        report['metaculus'] = format_metaculus(metaculus_questions)
-        all_poly = report.get('all_poly_markets', [])
-        if all_poly and metaculus_questions:
-            report['metaculus_vs_poly'] = cross_reference_metaculus_polymarket(metaculus_questions, all_poly)
-        print(f"Metaculus: {len(metaculus_questions)} questions")
-    except Exception as e:
-        report['metaculus'] = f"Metaculus unavailable: {str(e)}"
-        print(f"Metaculus error: {str(e)}")
-
-    time.sleep(5)
-
-    # Crypto
-    print("Scanning crypto...")
-    try:
-        crypto_data = get_crypto_data()
-        fear_greed = get_fear_greed_index()
-        report['crypto'] = format_crypto_report(crypto_data, fear_greed)
-        print("Crypto done")
-    except Exception as e:
-        report['crypto'] = f"Crypto unavailable: {str(e)}"
-
-    time.sleep(5)
-
-    # FRED economic data
-    print("Getting FRED economic data...")
-    try:
-        report['fred'] = get_fred_data()
-        print("FRED done")
-    except Exception as e:
-        report['fred'] = f"FRED unavailable: {str(e)}"
-
-    time.sleep(5)
-
-    # Commodities
-    print("Getting commodities...")
-    try:
-        report['commodities'] = get_real_commodity_prices()
-        print("Commodities done")
-    except Exception as e:
-        report['commodities'] = f"Commodities unavailable: {str(e)}"
-
-    time.sleep(5)
-
-    # Political news
-    print("Researching political news...")
-    try:
-        report['political'] = research_political_news()[:3000]
-        print("Political done")
-    except Exception as e:
-        report['political'] = f"Political unavailable: {str(e)}"
-
-    time.sleep(5)
-
-    # Sports with verified data
-    print("Researching sports...")
-    try:
-        sports_markets = report.get('sports_markets', [])
-        report['sports'] = research_sports_markets(sports_markets[:4]) if sports_markets else "No sports markets."
-        print("Sports done")
-    except Exception as e:
-        report['sports'] = f"Sports unavailable: {str(e)}"
-
-    time.sleep(5)
-
-    # Weather
-    print("Researching weather markets...")
-    try:
-        weather_markets = report.get('weather_markets', [])
-        report['weather'] = research_weather_for_markets(weather_markets) if weather_markets else "No weather markets."
-        print("Weather done")
-    except Exception as e:
-        report['weather'] = f"Weather unavailable: {str(e)}"
-
-    time.sleep(10)
-
-    # Synthesize
-    print("Synthesizing...")
-    try:
-        synthesis_prompt = f"""You are Bina, texting Nathaniel (18, Beverly Hills) his morning intelligence report.
-
-STRICT RULES:
-1. NEVER recommend without exact resolution date
-2. NEVER recommend markets above 90% or below 10% YES
-3. NEVER recommend "before GTA VI" floor contracts — they lock capital for near-zero return
-4. NEVER quote prices not in the verified data below — say "price unavailable" if missing
-5. For sports calls, reference the real-world verified data — never assume
-6. Complete all arb math when data is present — don't say "need more data"
-7. When Kalshi and Polymarket disagree by >5% on the same event, flag it — that's a real edge
-8. When Metaculus experts disagree with Polymarket money, flag it — expert consensus vs dumb money is real alpha
-9. Connect political/economic news to specific markets — name the market and the mispricing
-10. Under 400 words total
-
-DATA SOURCES:
-
-POLYMARKET (with odds + contract details):
-{report['polymarket'][:1500]}
-
-KALSHI MARKETS:
-{report['kalshi'][:800]}
-
-POLYMARKET vs KALSHI PRICE GAPS:
-{report['cross_reference'][:600]}
-
-METACULUS EXPERT FORECASTS:
-{report['metaculus'][:600]}
-
-EXPERT vs MARKET DISAGREEMENTS:
-{report['metaculus_vs_poly'][:600]}
-
-FRED ECONOMIC DATA (Federal Reserve):
-{report['fred'][:400]}
-
-CRYPTO:
-{report['crypto'][:400]}
-
-COMMODITIES:
-{report['commodities'][:200]}
-
-POLITICAL NEWS:
-{report['political'][:1000]}
-
-SPORTS (verified):
-{report['sports'][:600]}
-
-WEATHER MARKETS:
-{report['weather'][:400]}
-
-Write like a smart friend texting. **Bold** key numbers. Get straight to it — no greeting.
-
-## What I found overnight
-Single most actionable genuine opportunity.
-
-## Top plays
-For each: exact market, current odds, resolution date, position, confidence, why price is wrong using actual data.
-
-## Cross-platform edge (if any)
-If Polymarket and Kalshi disagree, or experts and market disagree, flag the specific gap and the play.
-
-## Watch today
-2-3 specific events next 24h. For each, name the specific market it affects and how.
-
-## The edge
-One non-obvious contrarian insight backed by verified numbers."""
-
-        response = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=1200,
-            messages=[{"role": "user", "content": synthesis_prompt}]
+        response = requests.get(
+            'https://api.elections.kalshi.com/trade-api/v2/markets',
+            params={'limit': limit, 'status': 'open'},
+            headers={'Accept': 'application/json'},
+            timeout=15
         )
-        report['synthesis'] = response.content[0].text
-        save_memory(f"Intelligence synthesis: {report['synthesis'][:500]}", memory_type='research')
-        print("Synthesis done")
+        if response.status_code == 200:
+            markets = response.json().get('markets', [])
+            processed = []
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            for m in markets:
+                close_time = m.get('close_time', '')
+                days_until = None
+                end_date_str = 'Unknown'
+                if close_time:
+                    try:
+                        end_dt = datetime.datetime.fromisoformat(close_time.replace('Z', '+00:00'))
+                        days_until = (end_dt - now_utc).days
+                        end_date_str = end_dt.strftime('%b %d, %Y')
+                        if days_until < 0:
+                            continue
+                    except:
+                        pass
+                yes_price = m.get('yes_bid', m.get('last_price', None))
+                if yes_price is not None:
+                    yes_price = yes_price / 100
+                processed.append({
+                    'title': m.get('title', ''),
+                    'yes_price': yes_price,
+                    'no_price': (1 - yes_price) if yes_price else None,
+                    'volume': m.get('volume', 0) or 0,
+                    'end_date': end_date_str,
+                    'days_until': days_until,
+                    'category': m.get('category', '')
+                })
+            return processed
+        return []
     except Exception as e:
-        report['synthesis'] = f"Synthesis error: {str(e)}"
+        print(f"Kalshi error: {str(e)}")
+        return []
 
-    # Save
+def format_kalshi_markets(markets):
+    if not markets:
+        return "Kalshi unavailable."
+    output = "**Kalshi Markets**\n"
+    by_cat = {}
+    for m in markets:
+        cat = m.get('category', 'Other') or 'Other'
+        if cat not in by_cat:
+            by_cat[cat] = []
+        by_cat[cat].append(m)
+    for cat in ['Politics', 'Economics', 'Climate', 'Sports']:
+        if cat in by_cat:
+            output += f"\n{cat.upper()}:\n"
+            for m in sorted(by_cat[cat], key=lambda x: x.get('volume', 0), reverse=True)[:4]:
+                yes = m.get('yes_price')
+                days = m.get('days_until')
+                days_str = f"{days}d" if days is not None else "?"
+                if yes:
+                    output += f"• {m['title']} — YES: {yes:.1%} | {m.get('end_date', '?')} ({days_str})\n"
+    return output
+
+
+# ── Metaculus ─────────────────────────────────────────────────────────────────
+
+def get_metaculus_questions(limit=15):
     try:
-        save_keys = ['date', 'time', 'polymarket', 'kalshi', 'cross_reference',
-                     'metaculus', 'metaculus_vs_poly', 'crypto', 'fred',
-                     'commodities', 'political', 'sports', 'weather', 'synthesis']
-        save_data = {k: report.get(k, '') for k in save_keys}
-        with open(OVERNIGHT_REPORT_FILE, 'w') as f:
-            json.dump(save_data, f)
-        print("Report saved")
+        response = requests.get(
+            'https://www.metaculus.com/api2/questions/',
+            params={'limit': limit, 'status': 'open', 'order_by': '-activity', 'type': 'forecast'},
+            headers={'Accept': 'application/json'},
+            timeout=15
+        )
+        if response.status_code == 200:
+            questions = []
+            for q in response.json().get('results', []):
+                community = q.get('community_prediction', {})
+                prediction = community.get('full', {}).get('q2') if community else None
+                questions.append({
+                    'title': q.get('title', ''),
+                    'prediction': prediction,
+                    'resolution_date': q.get('resolution', '')[:10] if q.get('resolution') else 'Unknown',
+                    'forecasters': q.get('number_of_predictions', 0)
+                })
+            return questions
+        return []
     except Exception as e:
-        print(f"Save error: {str(e)}")
-
-    print("Research complete — delivering")
-    deliver_report(report)
-    return report
-
-
-def deliver_report(report=None):
-    if report is None:
-        if os.path.exists(OVERNIGHT_REPORT_FILE):
-            try:
-                with open(OVERNIGHT_REPORT_FILE, 'r') as f:
-                    report = json.load(f)
-            except:
-                return
-        else:
-            return
-
-    date = report.get('date', datetime.datetime.now().strftime('%Y-%m-%d'))
-
-    if report.get('synthesis'):
-        add_notification({
-            'id': f'intel-{date}-{int(time.time())}',
-            'type': 'intelligence',
-            'subject': f'🧠 Intelligence Report — {date}',
-            'from': 'Bina Research Engine',
-            'body': report['synthesis'],
-            'draft_reply': '',
-            'read': False,
-            'timestamp': time.time()
-        })
-
-    if report.get('cross_reference') and 'No significant' not in report['cross_reference']:
-        add_notification({
-            'id': f'xref-{date}-{int(time.time())}',
-            'type': 'intelligence',
-            'subject': '⚡ Cross-Platform Price Gaps',
-            'from': 'Bina Arbitrage',
-            'body': report['cross_reference'] + '\n\n' + report.get('metaculus_vs_poly', ''),
-            'draft_reply': '',
-            'read': False,
-            'timestamp': time.time()
-        })
-
-    if report.get('crypto') and 'unavailable' not in report['crypto'].lower():
-        add_notification({
-            'id': f'crypto-{date}-{int(time.time())}',
-            'type': 'intelligence',
-            'subject': '📊 Crypto + Economic Data',
-            'from': 'Bina Markets',
-            'body': report['crypto'] + '\n\n' + report.get('fred', ''),
-            'draft_reply': '',
-            'read': False,
-            'timestamp': time.time()
-        })
-
-    if report.get('polymarket') and 'unavailable' not in report['polymarket'].lower():
-        add_notification({
-            'id': f'poly-{date}-{int(time.time())}',
-            'type': 'intelligence',
-            'subject': '🎯 All Markets — Polymarket + Kalshi',
-            'from': 'Bina Markets',
-            'body': report['polymarket'][:1500] + '\n\n' + report.get('kalshi', '')[:800],
-            'draft_reply': '',
-            'read': False,
-            'timestamp': time.time()
-        })
-
-    send_push(
-        '🧠 Bina — Intel Ready',
-        'Overnight research done. Check Intel Feed.',
-        BINA_URL + '?open=feed',
-        notif_type='feed'
-    )
-    print("Report delivered")
+        print(f"Metaculus error: {str(e)}")
+        return []
 
 
 # ── Google Auth ───────────────────────────────────────────────────────────────
@@ -1405,18 +835,12 @@ def process_calendar_commands(text):
 def master_monitor():
     print("Master monitor started")
     last_briefing_day = -1
-    last_overnight_day = -1
 
     while True:
         try:
             la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
             la_hour = la_time.hour
             la_day = la_time.timetuple().tm_yday
-
-            if la_hour == 0 and la_day != last_overnight_day:
-                last_overnight_day = la_day
-                print("Midnight — launching overnight research")
-                threading.Thread(target=run_overnight_research, daemon=True).start()
 
             if la_hour == 7 and la_day != last_briefing_day:
                 last_briefing_day = la_day
@@ -1538,6 +962,30 @@ def mark_read(notif_id):
     save_notifications(notifications)
     return jsonify({'success': True})
 
+@app.route('/internal/add-notification', methods=['POST'])
+def internal_add_notification():
+    """Internal endpoint for research worker to push notifications."""
+    data = request.json
+    if not data:
+        return jsonify({'error': 'No data'}), 400
+    add_notification({
+        'id': data.get('id', f'research-{int(time.time())}'),
+        'type': data.get('type', 'intelligence'),
+        'subject': data.get('subject', ''),
+        'from': data.get('from', 'Bina Research'),
+        'body': data.get('body', ''),
+        'draft_reply': '',
+        'read': False,
+        'timestamp': data.get('timestamp', time.time())
+    })
+    send_push(
+        data.get('subject', 'Bina Intelligence')[:50],
+        'New intelligence in your feed.',
+        BINA_URL + '?open=feed',
+        notif_type='feed'
+    )
+    return jsonify({'success': True})
+
 @app.route('/send-draft', methods=['POST'])
 def send_draft():
     data = request.json
@@ -1570,13 +1018,22 @@ def test_push():
 
 @app.route('/test-research')
 def test_research():
-    threading.Thread(target=run_overnight_research, daemon=True).start()
-    return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Research started! Check Intel Feed in ~10 minutes.</h2>'
-
-@app.route('/deliver-report')
-def deliver_report_route():
-    deliver_report()
-    return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Report delivered!</h2>'
+    """Manual trigger — calls research worker directly for testing."""
+    try:
+        response = requests.post(
+            f'{BINA_URL}/internal/add-notification',
+            json={
+                'id': f'test-{int(time.time())}',
+                'type': 'intelligence',
+                'subject': '🧪 Test — Research Worker Online',
+                'from': 'Bina',
+                'body': 'Research worker is running. Deep reports delivered every 2 hours automatically.',
+                'timestamp': time.time()
+            }
+        )
+    except:
+        pass
+    return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Research worker running on bina-research service!</h2>'
 
 @app.route('/test-email')
 def test_email():
@@ -1594,20 +1051,6 @@ def get_polymarket_route():
     markets = get_polymarket_markets_with_odds(limit=50)
     categorized = categorize_polymarket(markets)
     return jsonify({'count': len(markets), 'formatted': format_markets_for_analysis(categorized)})
-
-@app.route('/kalshi')
-def get_kalshi_route():
-    markets = get_kalshi_markets(limit=50)
-    return jsonify({'count': len(markets), 'formatted': format_kalshi_markets(markets)})
-
-@app.route('/metaculus')
-def get_metaculus_route():
-    questions = get_metaculus_questions(limit=20)
-    return jsonify({'count': len(questions), 'formatted': format_metaculus(questions)})
-
-@app.route('/fred')
-def get_fred_route():
-    return jsonify({'data': get_fred_data()})
 
 @app.route('/memories', methods=['GET'])
 def get_memories_route():
@@ -1668,7 +1111,8 @@ def chat():
 
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'stock', 'weather', 'research', 'tell me about', 'what happened',
-                       'today', 'trending', 'recent', 'update', 'best', 'top', 'political', 'politics']
+                       'today', 'trending', 'recent', 'update', 'best', 'top', 'political', 'politics',
+                       'gold', 'oil', 'commodity', 'strait', 'war', 'attack', 'breaking']
     deep_triggers = ['research', 'deep dive', 'everything about', 'full report', 'analyze',
                      'investigate', 'background on', 'tell me about']
 
