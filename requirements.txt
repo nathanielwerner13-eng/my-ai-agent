@@ -6,3 +6,6 @@ duckduckgo_search
 gunicorn
 requests
 pywebpush
+cryptography
+pinecone
+openai
