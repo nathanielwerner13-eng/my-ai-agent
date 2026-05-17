@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify, session, redirect
 from flask_cors import CORS
 from anthropic import Anthropic
 from duckduckgo_search import DDGS
-from pywebpush import webpush, WebPushException
+from pywebpush import webpush, WebPushException, Vapid
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.secret_key = os.environ.get('SECRET_KEY', 'bina-secret-key-2024')
@@ -79,8 +79,12 @@ def save_subscriptions(subs):
 def send_push(title, body, url=None):
     if url is None:
         url = BINA_URL
+    if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+        print("VAPID keys not set")
+        return
     subscriptions = load_subscriptions()
     if not subscriptions:
+        print("No push subscriptions")
         return
     payload = json.dumps({'title': title, 'body': body, 'url': url})
     for sub in subscriptions:
@@ -91,6 +95,7 @@ def send_push(title, body, url=None):
                 vapid_private_key=VAPID_PRIVATE_KEY,
                 vapid_claims={'sub': VAPID_CLAIMS_EMAIL}
             )
+            print(f"Push sent: {title}")
         except WebPushException as e:
             print(f"Push error: {e}")
 
@@ -364,7 +369,7 @@ def monitor_inbox():
                     'read': False,
                     'timestamp': time.time()
                 })
-                send_push('☀️ Bina', 'Your morning briefing is ready. Open Bina to review.', BINA_URL)
+                send_push('☀️ Bina', 'Your morning briefing is ready.', BINA_URL)
                 last_briefing_day = la_day
 
             seen = load_seen_emails()
@@ -445,11 +450,34 @@ def subscribe():
     if sub not in subs:
         subs.append(sub)
         save_subscriptions(subs)
+    print(f"Subscription saved. Total: {len(subs)}")
     return jsonify({'success': True})
 
 @app.route('/vapid-public-key')
 def vapid_key():
     return jsonify({'key': VAPID_PUBLIC_KEY})
+
+@app.route('/generate-vapid')
+def generate_vapid():
+    try:
+        v = Vapid()
+        v.generate_keys()
+        pub = v.public_key
+        priv = v.private_key
+        return f"""
+        <html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
+        <h2>✅ Fresh VAPID Keys</h2>
+        <p><b>VAPID_PUBLIC_KEY:</b></p>
+        <textarea style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{pub}</textarea>
+        <br><br>
+        <p><b>VAPID_PRIVATE_KEY:</b></p>
+        <textarea style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{priv}</textarea>
+        <br><br>
+        <p style="color:#ff0">⚠️ Copy both into Railway Variables then delete /generate-vapid from app.py!</p>
+        </body></html>
+        """
+    except Exception as e:
+        return f'<h2 style="color:red;font-family:monospace;padding:40px">Error: {str(e)}</h2>'
 
 @app.route('/notifications', methods=['GET'])
 def get_notifications():
