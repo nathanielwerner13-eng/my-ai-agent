@@ -100,6 +100,7 @@ def send_push(title, body, url=None):
             print(f"Push sent: {title}")
         except WebPushException as e:
             print(f"Push error: {e}")
+            print(f"Response body: {e.response.text if hasattr(e, 'response') and e.response else 'no response'}")
 
 
 # ── Notifications ─────────────────────────────────────────────────────────────
@@ -464,33 +465,33 @@ def generate_vapid():
     try:
         private_key = ec.generate_private_key(ec.SECP256R1())
 
-        # Get uncompressed public key (04 + x + y = 65 bytes)
+        # Get uncompressed public key (04 + x + y = 65 bytes = 87 base64url chars)
         pub_bytes = private_key.public_key().public_bytes(
             serialization.Encoding.X962,
             serialization.PublicFormat.UncompressedPoint
         )
 
-        # Get private key as DER and extract the raw 32-byte scalar
-        priv_der = private_key.private_bytes(
-            serialization.Encoding.DER,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption()
-        )
-        # The raw private key scalar is the last 32 bytes of the DER
-        priv_raw = priv_der[-32:]
+        # Get raw private key integer directly — correct way
+        priv_numbers = private_key.private_numbers()
+        priv_int = priv_numbers.private_value
+        priv_raw = priv_int.to_bytes(32, 'big')
 
         pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b"=").decode()
         priv_b64 = base64.urlsafe_b64encode(priv_raw).rstrip(b"=").decode()
+
+        # Verify they are different
+        keys_match = pub_b64.endswith(priv_b64) or priv_b64 in pub_b64
 
         return f"""
         <html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
         <h2>✅ Fresh VAPID Keys</h2>
         <p>Public key: {len(pub_b64)} chars | Private key: {len(priv_b64)} chars</p>
+        <p style="color:{'red' if keys_match else '#0f0'}">Keys are {'OVERLAPPING - REFRESH PAGE' if keys_match else 'distinct ✅'}</p>
         <br>
-        <p><b>VAPID_PUBLIC_KEY (copy this into Railway):</b></p>
+        <p><b>VAPID_PUBLIC_KEY:</b></p>
         <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{pub_b64}</textarea>
         <br><br>
-        <p><b>VAPID_PRIVATE_KEY (copy this into Railway):</b></p>
+        <p><b>VAPID_PRIVATE_KEY:</b></p>
         <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{priv_b64}</textarea>
         </body></html>
         """
