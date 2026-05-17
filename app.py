@@ -17,16 +17,12 @@ from pywebpush import webpush, WebPushException
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from pinecone import Pinecone
-from openai import OpenAI
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.secret_key = os.environ.get('SECRET_KEY', 'bina-secret-key-2024')
 CORS(app)
 
 client = Anthropic()
-openai_client = OpenAI(api_key=os.environ.get('ANTHROPIC_API_KEY'))
-
-# Pinecone setup
 pc = Pinecone(api_key=os.environ.get('PINECONE_API_KEY', ''))
 PINECONE_INDEX = os.environ.get('PINECONE_INDEX', 'bina-memory')
 
@@ -41,6 +37,7 @@ VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
 VAPID_CLAIMS_EMAIL = os.environ.get('VAPID_CLAIMS_EMAIL', 'mailto:nathanielwerner13@gmail.com')
 BINA_URL = 'https://my-ai-agent-production-5e17.up.railway.app'
 SERPER_API_KEY = os.environ.get('SERPER_API_KEY', '')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 
 SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner.
 
@@ -63,47 +60,40 @@ YOUR CAPABILITIES:
 - Research people, companies, investments, opportunities
 - Help with business strategy, outreach, scheduling, and execution
 
-MEMORY INSTRUCTIONS:
-You have access to Nathaniel's memory from past conversations. When relevant memories are shown, reference them naturally — like a person who genuinely remembers past conversations. Say things like "You mentioned this last week..." or "Based on what you told me about X..." Don't make it robotic.
+CRITICAL MEMORY INSTRUCTIONS:
+You have access to Nathaniel's memories from past conversations shown below. You MUST use these memories naturally in every response. If a memory is relevant — even slightly — reference it. For example if he asks about dentists and you know his mom is a dentist, mention it. If he asks about business and you know his goals, reference them. Think of yourself as someone who genuinely knows Nathaniel and naturally brings up relevant things you remember about him. Never ignore memories that could be useful.
 
 PERSONALITY:
 - Sharp, direct, no fluff
 - Proactive — tell him what he should know before he asks
 - Think like a brilliant chief of staff who is always one step ahead
-- When you find something interesting or an opportunity, flag it
-- Be concise unless depth is needed
 - Feel like a real relationship, not a tool
+- Be concise unless depth is needed
 
 The current date and time in Los Angeles will be injected into every message."""
 
 
-# ── Memory (Pinecone) ─────────────────────────────────────────────────────────
+# ── Memory (Pinecone + OpenAI embeddings) ─────────────────────────────────────
 
 def get_embedding(text):
-    """Get embedding using OpenAI's API."""
     try:
-        # Use Anthropic API key won't work for OpenAI embeddings
-        # Use a simple hash-based approach as fallback, or use OpenAI
         response = requests.post(
             'https://api.openai.com/v1/embeddings',
             headers={
-                'Authorization': f'Bearer {os.environ.get("OPENAI_API_KEY", "")}',
+                'Authorization': f'Bearer {OPENAI_API_KEY}',
                 'Content-Type': 'application/json'
             },
-            json={
-                'model': 'text-embedding-ada-002',
-                'input': text[:8000]
-            }
+            json={'model': 'text-embedding-ada-002', 'input': text[:8000]}
         )
         if response.status_code == 200:
             return response.json()['data'][0]['embedding']
+        print(f"Embedding API error: {response.text}")
         return None
     except Exception as e:
         print(f"Embedding error: {str(e)}")
         return None
 
 def save_memory(text, memory_type='conversation', metadata=None):
-    """Save a memory to Pinecone."""
     try:
         embedding = get_embedding(text)
         if not embedding:
@@ -118,32 +108,23 @@ def save_memory(text, memory_type='conversation', metadata=None):
         }
         if metadata:
             meta.update(metadata)
-        index.upsert(vectors=[{
-            'id': memory_id,
-            'values': embedding,
-            'metadata': meta
-        }])
-        print(f"Memory saved: {text[:50]}...")
+        index.upsert(vectors=[{'id': memory_id, 'values': embedding, 'metadata': meta}])
+        print(f"Memory saved: {text[:80]}...")
         return True
     except Exception as e:
         print(f"Save memory error: {str(e)}")
         return False
 
-def search_memories(query, top_k=5):
-    """Search for relevant memories."""
+def search_memories(query, top_k=8, threshold=0.5):
     try:
         embedding = get_embedding(query)
         if not embedding:
             return []
         index = pc.Index(PINECONE_INDEX)
-        results = index.query(
-            vector=embedding,
-            top_k=top_k,
-            include_metadata=True
-        )
+        results = index.query(vector=embedding, top_k=top_k, include_metadata=True)
         memories = []
         for match in results.matches:
-            if match.score > 0.75:  # Only highly relevant memories
+            if match.score > threshold:
                 memories.append({
                     'text': match.metadata.get('text', ''),
                     'date': match.metadata.get('date', ''),
@@ -155,13 +136,37 @@ def search_memories(query, top_k=5):
         print(f"Search memory error: {str(e)}")
         return []
 
+def get_all_context_memories(user_message):
+    """Get memories from multiple angles to ensure nothing relevant is missed."""
+    # Search based on the actual message
+    msg_memories = search_memories(user_message, top_k=8, threshold=0.5)
+
+    # Always pull personal/family context
+    personal_memories = search_memories(
+        "Nathaniel family mother father friends personal life", top_k=5, threshold=0.4)
+
+    # Pull business/goals context
+    business_memories = search_memories(
+        "Nathaniel business goals investments ideas plans", top_k=5, threshold=0.4)
+
+    # Combine and deduplicate by text
+    seen_texts = set()
+    all_memories = []
+    for m in msg_memories + personal_memories + business_memories:
+        if m['text'] not in seen_texts:
+            seen_texts.add(m['text'])
+            all_memories.append(m)
+
+    # Sort by relevance score
+    all_memories.sort(key=lambda x: x['score'], reverse=True)
+    return all_memories[:12]
+
 def format_memories(memories):
-    """Format memories for injection into context."""
     if not memories:
         return ""
-    output = "\n\nRelevant memories from past conversations:\n"
+    output = "\n\nWhat you remember about Nathaniel (USE THIS — reference relevant memories naturally):\n"
     for m in memories:
-        output += f"[{m['date']}] {m['text']}\n"
+        output += f"• [{m['date']}] {m['text']}\n"
     return output
 
 
@@ -666,11 +671,10 @@ def test_email():
     return f'<h2 style="color:red;font-family:monospace;padding:40px">❌ Failed: {error}</h2>'
 
 @app.route('/memories', methods=['GET'])
-def get_memories():
-    """Debug route to see stored memories."""
+def get_memories_route():
     query = request.args.get('q', 'Nathaniel')
-    memories = search_memories(query, top_k=10)
-    return jsonify({'memories': memories})
+    memories = search_memories(query, top_k=10, threshold=0.3)
+    return jsonify({'memories': memories, 'count': len(memories)})
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -685,18 +689,17 @@ def chat():
     la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
     user_message_with_context = f"[Current date and time in Los Angeles: {la_time_str}]\n\n{user_message}"
 
-    # Search relevant memories
-    memories = search_memories(user_message, top_k=5)
-    memory_context = format_memories(memories)
+    # Get comprehensive memories from multiple angles
+    all_memories = get_all_context_memories(user_message)
+    memory_context = format_memories(all_memories)
 
-    # Web search triggers
+    # Web search
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'price', 'stock', 'weather', 'research', 'tell me about',
                        'what happened', 'crypto', 'bitcoin', 'market', 'today', 'trending',
                        'recent', 'update', 'best', 'top', 'review', 'how is', 'how are']
     deep_triggers = ['research', 'deep dive', 'everything about', 'full report',
                      'analyze', 'investigate', 'background on', 'who is', 'tell me about']
-
     msg_lower = user_message.lower()
 
     if any(word in msg_lower for word in deep_triggers):
@@ -731,14 +734,21 @@ def chat():
     calendar_results = process_calendar_commands(assistant_message)
     display_message = clean_response(assistant_message)
 
-    # Save conversation to memory automatically
-    memory_text = f"Nathaniel said: {user_message} | Bina responded: {display_message[:200]}"
+    # Save this conversation to memory
+    memory_text = f"Nathaniel said: {user_message} | Bina responded: {display_message[:300]}"
     save_memory(memory_text, memory_type='conversation')
 
-    # Save explicit memories
+    # Save explicit memories with higher priority
     memory_triggers = ['remember', 'save', 'note', 'important', "don't forget", 'keep in mind', 'remind me']
     if any(word in msg_lower for word in memory_triggers):
-        save_memory(f"IMPORTANT - Nathaniel said to remember: {user_message}", memory_type='explicit')
+        save_memory(f"IMPORTANT — Nathaniel said to remember: {user_message}", memory_type='explicit')
+
+    # Also save any facts mentioned about people or personal info
+    personal_triggers = ['my mom', 'my dad', 'my friend', 'my brother', 'my sister',
+                         'my girlfriend', 'my partner', 'i am', "i'm", 'i have', 'i work',
+                         'i live', 'i want', 'i hate', 'i love', 'my goal']
+    if any(word in msg_lower for word in personal_triggers):
+        save_memory(f"Personal info — Nathaniel said: {user_message}", memory_type='personal')
 
     result = {'response': display_message}
     if email_results:
@@ -747,7 +757,7 @@ def chat():
         if sent:
             result['email_sent'] = f"✅ Email sent to {sent[0]['to']}"
             send_push('Bina ✅', f'Message sent to {sent[0]["to"]}', BINA_URL)
-            save_memory(f"Sent email to {sent[0]['to']} with subject: {sent[0]['subject']}", memory_type='email')
+            save_memory(f"Sent email to {sent[0]['to']} — subject: {sent[0]['subject']}", memory_type='email')
         if failed:
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
     if calendar_results:
