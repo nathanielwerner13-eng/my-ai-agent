@@ -26,7 +26,6 @@ client = Anthropic()
 pc = Pinecone(api_key=os.environ.get('PINECONE_API_KEY', ''))
 PINECONE_INDEX = os.environ.get('PINECONE_INDEX', 'bina-memory')
 
-PASSPHRASE = 'bina2024'
 NOTIFICATIONS_FILE = 'notifications.json'
 SEEN_EMAILS_FILE = 'seen_emails.json'
 SUBSCRIPTIONS_FILE = 'subscriptions.json'
@@ -137,27 +136,17 @@ def search_memories(query, top_k=8, threshold=0.5):
         return []
 
 def get_all_context_memories(user_message):
-    """Get memories from multiple angles to ensure nothing relevant is missed."""
-    # Search based on the actual message
     msg_memories = search_memories(user_message, top_k=8, threshold=0.5)
-
-    # Always pull personal/family context
     personal_memories = search_memories(
         "Nathaniel family mother father friends personal life", top_k=5, threshold=0.4)
-
-    # Pull business/goals context
     business_memories = search_memories(
         "Nathaniel business goals investments ideas plans", top_k=5, threshold=0.4)
-
-    # Combine and deduplicate by text
     seen_texts = set()
     all_memories = []
     for m in msg_memories + personal_memories + business_memories:
         if m['text'] not in seen_texts:
             seen_texts.add(m['text'])
             all_memories.append(m)
-
-    # Sort by relevance score
     all_memories.sort(key=lambda x: x['score'], reverse=True)
     return all_memories[:12]
 
@@ -184,7 +173,7 @@ def save_subscriptions(subs):
 
 def send_push(title, body, url=None):
     if url is None:
-        url = BINA_URL
+        url = BINA_URL + '?open=notifications'
     if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
         return
     subscriptions = load_subscriptions()
@@ -201,6 +190,7 @@ def send_push(title, body, url=None):
                 vapid_claims={'sub': VAPID_CLAIMS_EMAIL}
             )
             good_subs.append(sub)
+            print(f"Push sent: {title}")
         except WebPushException as e:
             if '400' not in str(e) and '410' not in str(e):
                 good_subs.append(sub)
@@ -498,7 +488,7 @@ def monitor_inbox():
                     'read': False,
                     'timestamp': time.time()
                 })
-                send_push('☀️ Bina', 'Your morning briefing is ready.', BINA_URL)
+                send_push('☀️ Bina', 'Your morning briefing is ready.', BINA_URL + '?open=notifications')
                 last_briefing_day = la_day
 
             seen = load_seen_emails()
@@ -523,7 +513,7 @@ def monitor_inbox():
                             f"Received email from {email['from']} about: {email['subject']}",
                             memory_type='email'
                         )
-                        send_push('Bina — Review Required', f'New message from {sender}.', BINA_URL)
+                        send_push('Bina — Review Required', f'New message from {sender}.', BINA_URL + '?open=notifications')
                         print(f"Important + push: {email['from']}")
                     else:
                         print(f"Filtered: {email['from']} - {email['subject']}")
@@ -563,14 +553,6 @@ def manifest():
 @app.route('/sw.js')
 def service_worker():
     return app.send_static_file('sw.js')
-
-@app.route('/verify-passphrase', methods=['POST'])
-def verify_passphrase():
-    data = request.json
-    if data.get('passphrase') == PASSPHRASE:
-        session['authenticated'] = True
-        return jsonify({'success': True})
-    return jsonify({'success': False}), 401
 
 @app.route('/clear-subs')
 def clear_subs():
@@ -643,7 +625,7 @@ def send_draft():
             if n.get('subject') == subject:
                 n['replied'] = True
         save_notifications(notifications)
-        send_push('Bina ✅', 'Reply sent successfully.', BINA_URL)
+        send_push('Bina ✅', 'Reply sent successfully.', BINA_URL + '?open=notifications')
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': error})
 
@@ -660,7 +642,7 @@ def create_event_route():
 
 @app.route('/test-push')
 def test_push():
-    send_push('Bina 🔔', 'Test notification.', BINA_URL)
+    send_push('Bina 🔔', 'Test notification.', BINA_URL + '?open=notifications')
     return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Push sent!</h2>'
 
 @app.route('/test-email')
@@ -678,9 +660,6 @@ def get_memories_route():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    if not session.get('authenticated'):
-        return jsonify({'error': 'Not authenticated'}), 401
-
     data = request.json
     user_message = data.get('message', '')
     conversation_history = data.get('history', [])
@@ -689,11 +668,9 @@ def chat():
     la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
     user_message_with_context = f"[Current date and time in Los Angeles: {la_time_str}]\n\n{user_message}"
 
-    # Get comprehensive memories from multiple angles
     all_memories = get_all_context_memories(user_message)
     memory_context = format_memories(all_memories)
 
-    # Web search
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'price', 'stock', 'weather', 'research', 'tell me about',
                        'what happened', 'crypto', 'bitcoin', 'market', 'today', 'trending',
@@ -709,7 +686,6 @@ def chat():
         search_results = web_search(user_message)
         user_message_with_context += f"\n\nSearch results:\n{search_results}"
 
-    # Calendar context
     calendar_triggers = ['schedule', 'calendar', 'event', 'meeting', 'appointment',
                          'tomorrow', 'next week', 'briefing', 'what do i have', 'today']
     if any(word in msg_lower for word in calendar_triggers):
@@ -734,16 +710,13 @@ def chat():
     calendar_results = process_calendar_commands(assistant_message)
     display_message = clean_response(assistant_message)
 
-    # Save this conversation to memory
     memory_text = f"Nathaniel said: {user_message} | Bina responded: {display_message[:300]}"
     save_memory(memory_text, memory_type='conversation')
 
-    # Save explicit memories with higher priority
     memory_triggers = ['remember', 'save', 'note', 'important', "don't forget", 'keep in mind', 'remind me']
     if any(word in msg_lower for word in memory_triggers):
         save_memory(f"IMPORTANT — Nathaniel said to remember: {user_message}", memory_type='explicit')
 
-    # Also save any facts mentioned about people or personal info
     personal_triggers = ['my mom', 'my dad', 'my friend', 'my brother', 'my sister',
                          'my girlfriend', 'my partner', 'i am', "i'm", 'i have', 'i work',
                          'i live', 'i want', 'i hate', 'i love', 'my goal']
@@ -756,7 +729,7 @@ def chat():
         failed = [e for e in email_results if not e['success']]
         if sent:
             result['email_sent'] = f"✅ Email sent to {sent[0]['to']}"
-            send_push('Bina ✅', f'Message sent to {sent[0]["to"]}', BINA_URL)
+            send_push('Bina ✅', f'Message sent to {sent[0]["to"]}', BINA_URL + '?open=notifications')
             save_memory(f"Sent email to {sent[0]['to']} — subject: {sent[0]['subject']}", memory_type='email')
         if failed:
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
@@ -764,7 +737,7 @@ def chat():
         created = [e for e in calendar_results if e['success']]
         if created:
             result['event_created'] = f"📅 Event created: {created[0]['title']}"
-            send_push('Bina 📅', f'"{created[0]["title"]}" added to your calendar', BINA_URL)
+            send_push('Bina 📅', f'"{created[0]["title"]}" added to your calendar', BINA_URL + '?open=notifications')
             save_memory(f"Created calendar event: {created[0]['title']}", memory_type='calendar')
 
     return jsonify(result)
