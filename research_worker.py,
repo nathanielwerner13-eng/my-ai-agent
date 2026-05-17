@@ -1,1 +1,24 @@
-
+@app.route('/internal/add-notification', methods=['POST'])
+def internal_add_notification():
+    """Internal endpoint for research worker to push notifications."""
+    data = request.json
+    if not data:
+        return jsonify({'error': 'No data'}), 400
+    add_notification({
+        'id': data.get('id', f'research-{int(time.time())}'),
+        'type': data.get('type', 'intelligence'),
+        'subject': data.get('subject', ''),
+        'from': data.get('from', 'Bina Research'),
+        'body': data.get('body', ''),
+        'draft_reply': '',
+        'read': False,
+        'timestamp': data.get('timestamp', time.time())
+    })
+    # Also send push notification
+    send_push(
+        data.get('subject', 'Bina Intelligence')[:50],
+        'New intelligence in your feed.',
+        BINA_URL + '?open=feed',
+        notif_type='feed'
+    )
+    return jsonify({'success': True})
