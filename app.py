@@ -29,6 +29,7 @@ PINECONE_INDEX = os.environ.get('PINECONE_INDEX', 'bina-memory')
 NOTIFICATIONS_FILE = 'notifications.json'
 SEEN_EMAILS_FILE = 'seen_emails.json'
 SUBSCRIPTIONS_FILE = 'subscriptions.json'
+OVERNIGHT_REPORT_FILE = 'overnight_report.json'
 GMAIL_SCOPES = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar'
 REDIRECT_URI = 'https://my-ai-agent-production-5e17.up.railway.app/oauth/callback'
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
@@ -55,16 +56,14 @@ You are Nathaniel's personal chief of staff, business partner, and autonomous ag
 
 YOUR CAPABILITIES:
 - Send emails: SEND_EMAIL|to@email.com|Subject|Body END_EMAIL
-- Create calendar events: CREATE_EVENT|Title|2026-05-16T10:00:00|2026-05-16T11:00:00|Description END_EVENT
+- Create calendar events: CREATE_EVENT|Title|2026-05-17T10:00:00|2026-05-17T11:00:00|Description END_EVENT
 - Deep web search with full article content (automatically triggered)
-- Persistent memory across ALL conversations — you remember everything
-- Overnight research and intelligence gathering
-- Polymarket odds analysis and opportunity detection
-- Crypto market monitoring and analysis
-- Political and economic news synthesis
+- Persistent memory across ALL conversations
+- Overnight research: Polymarket, crypto, political news synthesis
+- Live crypto prices and Polymarket odds on demand
 
 CRITICAL MEMORY INSTRUCTIONS:
-You have access to Nathaniel's memories from past conversations. Reference them naturally. Never ignore relevant memories.
+You have access to Nathaniel's memories. Reference them naturally. Never ignore relevant memories.
 
 PERSONALITY:
 - Sharp, direct, no fluff
@@ -292,7 +291,7 @@ def get_polymarket_markets(limit=50):
         response = requests.get(
             'https://gamma-api.polymarket.com/markets',
             params={'limit': limit, 'active': 'true', 'closed': 'false'},
-            timeout=10
+            timeout=15
         )
         if response.status_code == 200:
             return response.json()
@@ -301,51 +300,51 @@ def get_polymarket_markets(limit=50):
         print(f"Polymarket error: {str(e)}")
         return []
 
-def get_polymarket_leaderboard():
-    try:
-        response = requests.get(
-            'https://gamma-api.polymarket.com/leaderboard',
-            params={'limit': 20},
-            timeout=10
-        )
-        if response.status_code == 200:
-            return response.json()
-        return []
-    except Exception as e:
-        print(f"Polymarket leaderboard error: {str(e)}")
-        return []
-
 def analyze_polymarket_opportunities(markets):
     if not markets:
         return "No Polymarket data available."
+
     output = f"Polymarket Analysis ({len(markets)} active markets):\n\n"
     political_markets = []
     crypto_markets = []
     other_markets = []
+
     for m in markets:
-        title = m.get('question', m.get('title', '')).lower()
-        if any(word in title for word in ['president', 'election', 'congress', 'senate', 'trump', 'biden', 'democrat', 'republican', 'war', 'nato', 'ukraine', 'china', 'iran', 'israel', 'political', 'vote', 'prime minister', 'president']):
-            political_markets.append(m)
+        title = str(m.get('question', m.get('title', ''))).lower()
+        volume = m.get('volume', 0) or 0
+        try:
+            volume = float(str(volume).replace(',', ''))
+        except:
+            volume = 0
+
+        market_info = {
+            'title': m.get('question', m.get('title', 'Unknown')),
+            'volume': volume
+        }
+
+        if any(word in title for word in ['president', 'election', 'congress', 'senate',
+                'trump', 'biden', 'democrat', 'republican', 'war', 'nato', 'ukraine',
+                'china', 'iran', 'israel', 'political', 'vote', 'prime minister',
+                'fed', 'federal reserve', 'tariff', 'trade']):
+            political_markets.append(market_info)
         elif any(word in title for word in ['bitcoin', 'btc', 'eth', 'crypto', 'solana', 'coin']):
-            crypto_markets.append(m)
+            crypto_markets.append(market_info)
         else:
-            other_markets.append(m)
+            other_markets.append(market_info)
 
-    output += f"Political markets: {len(political_markets)}\n"
-    output += f"Crypto markets: {len(crypto_markets)}\n"
-    output += f"Other markets: {len(other_markets)}\n\n"
+    # Sort by volume
+    political_markets.sort(key=lambda x: x['volume'], reverse=True)
+    crypto_markets.sort(key=lambda x: x['volume'], reverse=True)
 
-    output += "TOP POLITICAL MARKETS:\n"
+    output += f"Political markets: {len(political_markets)} | Crypto markets: {len(crypto_markets)}\n\n"
+
+    output += "TOP POLITICAL MARKETS BY VOLUME:\n"
     for m in political_markets[:10]:
-        title = m.get('question', m.get('title', 'Unknown'))
-        volume = m.get('volume', 0)
-        output += f"• {title} | Volume: ${volume:,.0f}\n"
+        output += f"• {m['title']} | Vol: ${m['volume']:,.0f}\n"
 
-    output += "\nTOP CRYPTO MARKETS:\n"
+    output += "\nTOP CRYPTO PREDICTION MARKETS:\n"
     for m in crypto_markets[:5]:
-        title = m.get('question', m.get('title', 'Unknown'))
-        volume = m.get('volume', 0)
-        output += f"• {title} | Volume: ${volume:,.0f}\n"
+        output += f"• {m['title']} | Vol: ${m['volume']:,.0f}\n"
 
     return output
 
@@ -354,11 +353,10 @@ def analyze_polymarket_opportunities(markets):
 
 def get_crypto_data():
     try:
-        coins = 'bitcoin,ethereum,solana,chainlink,render-token'
         response = requests.get(
-            f'https://api.coingecko.com/api/v3/simple/price',
+            'https://api.coingecko.com/api/v3/simple/price',
             params={
-                'ids': coins,
+                'ids': 'bitcoin,ethereum,solana,chainlink,render-token',
                 'vs_currencies': 'usd',
                 'include_24hr_change': 'true',
                 'include_24hr_vol': 'true',
@@ -377,8 +375,7 @@ def get_fear_greed_index():
     try:
         response = requests.get('https://api.alternative.me/fng/', timeout=10)
         if response.status_code == 200:
-            data = response.json()
-            return data['data'][0]
+            return response.json()['data'][0]
         return {}
     except Exception as e:
         print(f"Fear/greed error: {str(e)}")
@@ -397,7 +394,6 @@ def format_crypto_report(crypto_data, fear_greed):
     }
 
     output = "CRYPTO MARKET REPORT:\n\n"
-
     if fear_greed:
         output += f"Fear & Greed Index: {fear_greed.get('value', 'N/A')} — {fear_greed.get('value_classification', 'N/A')}\n\n"
 
@@ -405,69 +401,65 @@ def format_crypto_report(crypto_data, fear_greed):
         if coin_id in crypto_data:
             d = crypto_data[coin_id]
             price = d.get('usd', 0)
-            change = d.get('usd_24h_change', 0)
-            vol = d.get('usd_24h_vol', 0)
+            change = d.get('usd_24h_change', 0) or 0
+            vol = d.get('usd_24h_vol', 0) or 0
             arrow = '📈' if change > 0 else '📉'
             output += f"{arrow} {name}: ${price:,.2f} | 24h: {change:+.2f}% | Vol: ${vol:,.0f}\n"
 
     return output
 
 
-# ── Political News Research ───────────────────────────────────────────────────
+# ── Political News ────────────────────────────────────────────────────────────
 
 def research_political_news():
     queries = [
         "US politics breaking news today",
         "world politics major events today",
-        "US Congress legislation today",
-        "Federal Reserve interest rates news",
+        "US Congress legislation passed today",
+        "Federal Reserve interest rates decision news",
         "geopolitical conflict news today",
-        "US election 2024 2025 2026 news",
-        "China US relations news",
-        "Middle East news today",
-        "Europe political news today",
-        "economic policy news today",
-        "stock market political impact",
-        "prediction market political odds"
+        "Trump administration policy news",
+        "China US trade relations news",
+        "Middle East conflict news today",
+        "Europe political crisis news",
+        "economic recession inflation news",
+        "stock market political impact today",
+        "prediction market political odds movement"
     ]
     all_results = ""
     for query in queries:
-        result = web_search(query, num_results=3)
+        result = web_search(query, num_results=2)
         all_results += f"\n{result}\n"
-        time.sleep(0.5)
+        time.sleep(1)
     return all_results
 
 
-# ── Overnight Intelligence Engine ────────────────────────────────────────────
-
-overnight_report = {}
+# ── Overnight Research Engine ─────────────────────────────────────────────────
 
 def run_overnight_research():
-    global overnight_report
     print("Starting overnight research engine...")
     report = {
         'date': datetime.datetime.now().strftime('%Y-%m-%d'),
+        'time': datetime.datetime.now().strftime('%H:%M'),
         'polymarket': '',
         'crypto': '',
         'political': '',
-        'synthesis': '',
-        'top_opportunities': []
+        'synthesis': ''
     }
 
     # Step 1 — Polymarket
     print("Scanning Polymarket...")
     try:
         markets = get_polymarket_markets(limit=100)
-        leaderboard = get_polymarket_leaderboard()
         poly_analysis = analyze_polymarket_opportunities(markets)
         report['polymarket'] = poly_analysis
-        report['polymarket_raw'] = markets[:20]
-        save_memory(f"Polymarket overnight scan: {poly_analysis[:500]}", memory_type='research')
-        print(f"Polymarket: found {len(markets)} markets")
+        save_memory(f"Polymarket scan: {poly_analysis[:500]}", memory_type='research')
+        print(f"Polymarket: {len(markets)} markets analyzed")
     except Exception as e:
-        print(f"Polymarket research error: {str(e)}")
+        report['polymarket'] = f"Polymarket unavailable: {str(e)}"
+        print(f"Polymarket error: {str(e)}")
 
-    time.sleep(30)
+    time.sleep(10)
 
     # Step 2 — Crypto
     print("Scanning crypto markets...")
@@ -476,12 +468,13 @@ def run_overnight_research():
         fear_greed = get_fear_greed_index()
         crypto_report = format_crypto_report(crypto_data, fear_greed)
         report['crypto'] = crypto_report
-        save_memory(f"Crypto overnight scan: {crypto_report[:500]}", memory_type='research')
+        save_memory(f"Crypto scan: {crypto_report[:500]}", memory_type='research')
         print("Crypto data collected")
     except Exception as e:
-        print(f"Crypto research error: {str(e)}")
+        report['crypto'] = f"Crypto data unavailable: {str(e)}"
+        print(f"Crypto error: {str(e)}")
 
-    time.sleep(30)
+    time.sleep(10)
 
     # Step 3 — Political news
     print("Researching political news...")
@@ -491,16 +484,17 @@ def run_overnight_research():
         save_memory(f"Political research: {political_data[:500]}", memory_type='research')
         print("Political research complete")
     except Exception as e:
-        print(f"Political research error: {str(e)}")
+        report['political'] = f"Political research unavailable: {str(e)}"
+        print(f"Political error: {str(e)}")
 
-    time.sleep(30)
+    time.sleep(10)
 
-    # Step 4 — Synthesize everything with Claude
+    # Step 4 — Synthesize with Claude
     print("Synthesizing intelligence report...")
     try:
-        synthesis_prompt = f"""You are Bina, Nathaniel's AI chief of staff. He is 18, in Beverly Hills, interested in making money through prediction markets and crypto.
+        synthesis_prompt = f"""You are Bina, Nathaniel's AI chief of staff. He is 18, in Beverly Hills, wants to make money through prediction markets and crypto investing.
 
-Analyze all this data and create a ranked intelligence report with specific actionable recommendations.
+Analyze all this data and create a ranked intelligence report.
 
 POLYMARKET DATA:
 {report['polymarket']}
@@ -511,14 +505,19 @@ CRYPTO DATA:
 POLITICAL NEWS:
 {report['political'][:2000]}
 
-Create a report with:
-1. TOP 3 OPPORTUNITIES — specific actionable bets/investments with confidence level (High/Medium/Low) and reasoning
-2. KEY MARKET INSIGHTS — what's moving and why
-3. POLITICAL EVENTS TO WATCH — what could move markets in the next 24-48 hours
-4. CRYPTO OUTLOOK — specific price action to watch
-5. ONE BIG PICTURE OBSERVATION — something most people are missing
+Create a concise report with:
 
-Be specific, data-driven, and direct. No fluff. This is for someone who wants to make money."""
+1. TOP 3 OPPORTUNITIES — specific actionable recommendations with confidence level (High/Medium/Low) and clear reasoning. For Polymarket, name the specific market. For crypto, name the specific coin and direction.
+
+2. KEY MARKET MOVERS — what's driving markets right now
+
+3. POLITICAL EVENTS THAT COULD MOVE MARKETS — next 24-48 hours
+
+4. CRYPTO OUTLOOK — what to watch
+
+5. THE EDGE — one thing most people are missing that could be profitable
+
+Be specific, data-backed, and direct. No generic advice."""
 
         response = client.messages.create(
             model="claude-sonnet-4-5",
@@ -526,34 +525,54 @@ Be specific, data-driven, and direct. No fluff. This is for someone who wants to
             messages=[{"role": "user", "content": synthesis_prompt}]
         )
         report['synthesis'] = response.content[0].text
-        save_memory(f"Overnight intelligence synthesis: {report['synthesis'][:500]}", memory_type='research')
+        save_memory(f"Intelligence synthesis: {report['synthesis'][:500]}", memory_type='research')
         print("Synthesis complete")
     except Exception as e:
+        report['synthesis'] = f"Synthesis error: {str(e)}"
         print(f"Synthesis error: {str(e)}")
 
-    overnight_report = report
-    print("Overnight research complete")
+    # Save report to file
+    try:
+        save_data = {k: v for k, v in report.items()}
+        with open(OVERNIGHT_REPORT_FILE, 'w') as f:
+            json.dump(save_data, f)
+        print("Report saved to file")
+    except Exception as e:
+        print(f"Save report error: {str(e)}")
+
+    print("Overnight research complete — delivering now")
+
+    # Deliver immediately
+    deliver_report(report)
+
     return report
 
 
-def deliver_morning_report():
-    global overnight_report
-    if not overnight_report:
-        print("No overnight report to deliver")
-        return
+def deliver_report(report=None):
+    """Deliver the overnight report to Intel Feed."""
+    if report is None:
+        # Load from file
+        if os.path.exists(OVERNIGHT_REPORT_FILE):
+            try:
+                with open(OVERNIGHT_REPORT_FILE, 'r') as f:
+                    report = json.load(f)
+            except:
+                print("Could not load overnight report file")
+                return
+        else:
+            print("No overnight report available")
+            return
 
-    report = overnight_report
     synthesis = report.get('synthesis', 'No synthesis available')
     crypto = report.get('crypto', '')
+    date = report.get('date', datetime.datetime.now().strftime('%Y-%m-%d'))
+    report_time = report.get('time', '')
 
-    # Create a concise push notification summary
-    first_line = synthesis.split('\n')[0] if synthesis else 'Morning intelligence ready'
-
-    # Add to Intel Feed
+    # Add main intelligence report to Intel Feed
     add_notification({
-        'id': f'overnight-{report["date"]}',
+        'id': f'intel-{date}-{int(time.time())}',
         'type': 'intelligence',
-        'subject': f'🧠 Overnight Intelligence — {report["date"]}',
+        'subject': f'🧠 Intelligence Report — {date} {report_time}',
         'from': 'Bina Research Engine',
         'body': synthesis,
         'draft_reply': '',
@@ -561,10 +580,10 @@ def deliver_morning_report():
         'timestamp': time.time()
     })
 
-    # Also add crypto snapshot
-    if crypto:
+    # Add crypto snapshot separately
+    if crypto and 'unavailable' not in crypto.lower():
         add_notification({
-            'id': f'crypto-{report["date"]}',
+            'id': f'crypto-{date}-{int(time.time())}',
             'type': 'intelligence',
             'subject': '📊 Crypto Market Snapshot',
             'from': 'Bina Markets',
@@ -574,16 +593,29 @@ def deliver_morning_report():
             'timestamp': time.time()
         })
 
+    # Add Polymarket summary
+    polymarket = report.get('polymarket', '')
+    if polymarket and 'unavailable' not in polymarket.lower():
+        add_notification({
+            'id': f'poly-{date}-{int(time.time())}',
+            'type': 'intelligence',
+            'subject': '🎯 Polymarket Opportunities',
+            'from': 'Bina Markets',
+            'body': polymarket,
+            'draft_reply': '',
+            'read': False,
+            'timestamp': time.time()
+        })
+
     # Push notification
     send_push(
         '🧠 Bina Intelligence Ready',
-        'Overnight research complete. Top opportunities waiting.',
+        'Overnight research complete. Top opportunities waiting in Intel Feed.',
         BINA_URL + '?open=feed',
         notif_type='feed'
     )
 
-    overnight_report = {}
-    print("Morning report delivered")
+    print("Intelligence report delivered to Intel Feed")
 
 
 # ── Google Auth ───────────────────────────────────────────────────────────────
@@ -745,7 +777,6 @@ def master_monitor():
     print("Master monitor started")
     last_briefing_day = -1
     last_overnight_day = -1
-    last_report_day = -1
 
     while True:
         try:
@@ -753,14 +784,14 @@ def master_monitor():
             la_hour = la_time.hour
             la_day = la_time.timetuple().tm_yday
 
-            # ── 12am — Start overnight research ──
+            # Midnight — start overnight research
             if la_hour == 0 and la_day != last_overnight_day:
                 last_overnight_day = la_day
-                print("Midnight — launching overnight research thread")
-                research_thread = threading.Thread(target=run_overnight_research, daemon=True)
-                research_thread.start()
+                print("Midnight — launching overnight research")
+                t = threading.Thread(target=run_overnight_research, daemon=True)
+                t.start()
 
-            # ── 7am — Morning email briefing ──
+            # 7am — morning email briefing
             if la_hour == 7 and la_day != last_briefing_day:
                 last_briefing_day = la_day
                 try:
@@ -771,7 +802,7 @@ def master_monitor():
                     response = client.messages.create(
                         model="claude-sonnet-4-5",
                         max_tokens=400,
-                        system="You are Bina. Give Nathaniel a sharp morning briefing. Cover schedule and emails. Be concise.",
+                        system="You are Bina. Give Nathaniel a sharp morning briefing. Cover schedule and emails. Be concise and actionable.",
                         messages=[{"role": "user", "content": f"Morning briefing.\nSchedule:\n{events_text}\nEmails:\n{emails_text}"}]
                     )
                     briefing = response.content[0].text
@@ -789,12 +820,7 @@ def master_monitor():
                 except Exception as e:
                     print(f"Morning briefing error: {str(e)}")
 
-            # ── 9:30am — Deliver overnight intelligence report ──
-            if la_hour == 9 and la_time.minute >= 30 and la_day != last_report_day:
-                last_report_day = la_day
-                deliver_morning_report()
-
-            # ── Email monitoring every 60 seconds ──
+            # Email monitoring every 60 seconds
             seen = load_seen_emails()
             emails = get_inbox_emails(max_results=10)
             for email in emails:
@@ -944,15 +970,19 @@ def create_event_route():
 
 @app.route('/test-push')
 def test_push():
-    send_push('Bina 🔔', 'Test — Intel Feed.', BINA_URL + '?open=feed', notif_type='feed')
+    send_push('Bina 🔔', 'Test notification.', BINA_URL + '?open=feed', notif_type='feed')
     return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Push sent!</h2>'
 
 @app.route('/test-research')
 def test_research():
-    """Manually trigger overnight research for testing."""
-    thread = threading.Thread(target=run_overnight_research, daemon=True)
-    thread.start()
+    t = threading.Thread(target=run_overnight_research, daemon=True)
+    t.start()
     return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Research started! Check Intel Feed in ~5 minutes.</h2>'
+
+@app.route('/deliver-report')
+def deliver_report_route():
+    deliver_report()
+    return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Report delivered to Intel Feed!</h2>'
 
 @app.route('/test-email')
 def test_email():
@@ -962,13 +992,13 @@ def test_email():
     return f'<h2 style="color:red;font-family:monospace;padding:40px">❌ Failed: {error}</h2>'
 
 @app.route('/crypto')
-def get_crypto():
+def get_crypto_route():
     data = get_crypto_data()
     fg = get_fear_greed_index()
     return jsonify({'crypto': data, 'fear_greed': fg})
 
 @app.route('/polymarket')
-def get_polymarket():
+def get_polymarket_route():
     markets = get_polymarket_markets(limit=50)
     analysis = analyze_polymarket_opportunities(markets)
     return jsonify({'count': len(markets), 'analysis': analysis})
@@ -994,22 +1024,24 @@ def chat():
 
     msg_lower = user_message.lower()
 
-    # Crypto data injection
-    if any(word in msg_lower for word in ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 'solana', 'sol', 'price', 'market cap']):
+    # Live crypto injection
+    if any(word in msg_lower for word in ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth',
+                                           'solana', 'sol', 'price', 'market cap', 'coin']):
         crypto_data = get_crypto_data()
         fear_greed = get_fear_greed_index()
         crypto_report = format_crypto_report(crypto_data, fear_greed)
         user_message_with_context += f"\n\nLive crypto data:\n{crypto_report}"
 
-    # Polymarket data injection
-    if any(word in msg_lower for word in ['polymarket', 'prediction market', 'odds', 'bet']):
+    # Live Polymarket injection
+    if any(word in msg_lower for word in ['polymarket', 'prediction market', 'odds', 'bet', 'market']):
         markets = get_polymarket_markets(limit=30)
         poly_analysis = analyze_polymarket_opportunities(markets)
         user_message_with_context += f"\n\nLive Polymarket data:\n{poly_analysis}"
 
+    # Web search
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'stock', 'weather', 'research', 'tell me about',
-                       'what happened', 'market', 'today', 'trending', 'recent', 'update',
+                       'what happened', 'today', 'trending', 'recent', 'update',
                        'best', 'top', 'review', 'how is', 'how are', 'political', 'politics']
     deep_triggers = ['research', 'deep dive', 'everything about', 'full report',
                      'analyze', 'investigate', 'background on', 'who is', 'tell me about']
@@ -1021,6 +1053,7 @@ def chat():
         search_results = web_search(user_message)
         user_message_with_context += f"\n\nSearch results:\n{search_results}"
 
+    # Calendar context
     calendar_triggers = ['schedule', 'calendar', 'event', 'meeting', 'appointment',
                          'tomorrow', 'next week', 'briefing', 'what do i have', 'today']
     if any(word in msg_lower for word in calendar_triggers):
@@ -1047,14 +1080,12 @@ def chat():
 
     save_memory(f"Nathaniel said: {user_message} | Bina responded: {display_message[:300]}", memory_type='conversation')
 
-    memory_triggers = ['remember', 'save', 'note', 'important', "don't forget", 'keep in mind', 'remind me']
-    if any(word in msg_lower for word in memory_triggers):
+    if any(word in msg_lower for word in ['remember', 'save', 'note', 'important', "don't forget", 'remind me']):
         save_memory(f"IMPORTANT — Nathaniel said to remember: {user_message}", memory_type='explicit')
 
-    personal_triggers = ['my mom', 'my dad', 'my friend', 'my brother', 'my sister',
-                         'my girlfriend', 'my partner', 'i am', "i'm", 'i have', 'i work',
-                         'i live', 'i want', 'i hate', 'i love', 'my goal']
-    if any(word in msg_lower for word in personal_triggers):
+    if any(word in msg_lower for word in ['my mom', 'my dad', 'my friend', 'my brother', 'my sister',
+                                           'my girlfriend', 'i am', "i'm", 'i have', 'i work',
+                                           'i live', 'i want', 'i hate', 'i love', 'my goal']):
         save_memory(f"Personal info — Nathaniel said: {user_message}", memory_type='personal')
 
     result = {'response': display_message}
