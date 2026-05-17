@@ -16,7 +16,7 @@ self.addEventListener('push', function(event) {
         icon: '/icon-192.png',
         badge: '/icon-192.png',
         vibrate: [200, 100, 200],
-        data: { url: BINA_URL }
+        data: { url: BINA_URL + '?open=notifications' }
     };
     event.waitUntil(self.registration.showNotification(title, options));
 });
@@ -27,10 +27,11 @@ self.addEventListener('notificationclick', function(event) {
         clients.matchAll({type: 'window', includeUncontrolled: true}).then(function(clientList) {
             for (var i = 0; i < clientList.length; i++) {
                 if (clientList[i].url.includes('my-ai-agent-production-5e17') && 'focus' in clientList[i]) {
+                    clientList[i].postMessage({action: 'openNotifications'});
                     return clientList[i].focus();
                 }
             }
-            return clients.openWindow(BINA_URL);
+            return clients.openWindow(BINA_URL + '?open=notifications');
         })
     );
 });
