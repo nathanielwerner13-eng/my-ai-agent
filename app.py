@@ -6,6 +6,7 @@ import requests
 import threading
 import time
 import datetime
+import uuid
 from urllib.parse import urlencode
 from email.mime.text import MIMEText
 from flask import Flask, request, jsonify, session, redirect
@@ -15,15 +16,21 @@ from duckduckgo_search import DDGS
 from pywebpush import webpush, WebPushException
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
+from pinecone import Pinecone
+from openai import OpenAI
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.secret_key = os.environ.get('SECRET_KEY', 'bina-secret-key-2024')
 CORS(app)
 
 client = Anthropic()
+openai_client = OpenAI(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+# Pinecone setup
+pc = Pinecone(api_key=os.environ.get('PINECONE_API_KEY', ''))
+PINECONE_INDEX = os.environ.get('PINECONE_INDEX', 'bina-memory')
 
 PASSPHRASE = 'bina2024'
-MEMORY_FILE = 'memory.json'
 NOTIFICATIONS_FILE = 'notifications.json'
 SEEN_EMAILS_FILE = 'seen_emails.json'
 SUBSCRIPTIONS_FILE = 'subscriptions.json'
@@ -52,9 +59,12 @@ YOUR CAPABILITIES:
 - Send emails: SEND_EMAIL|to@email.com|Subject|Body END_EMAIL
 - Create calendar events: CREATE_EVENT|Title|2026-05-16T10:00:00|2026-05-16T11:00:00|Description END_EVENT
 - Deep web search with full article content (automatically triggered)
-- Remember important information across conversations
+- Persistent memory across ALL conversations — you remember everything
 - Research people, companies, investments, opportunities
 - Help with business strategy, outreach, scheduling, and execution
+
+MEMORY INSTRUCTIONS:
+You have access to Nathaniel's memory from past conversations. When relevant memories are shown, reference them naturally — like a person who genuinely remembers past conversations. Say things like "You mentioned this last week..." or "Based on what you told me about X..." Don't make it robotic.
 
 PERSONALITY:
 - Sharp, direct, no fluff
@@ -62,21 +72,97 @@ PERSONALITY:
 - Think like a brilliant chief of staff who is always one step ahead
 - When you find something interesting or an opportunity, flag it
 - Be concise unless depth is needed
+- Feel like a real relationship, not a tool
 
-The current date and time in Los Angeles will be injected into every message. Always use it for scheduling and context."""
+The current date and time in Los Angeles will be injected into every message."""
 
 
-# ── Memory ───────────────────────────────────────────────────────────────────
+# ── Memory (Pinecone) ─────────────────────────────────────────────────────────
 
-def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, 'r') as f:
-            return json.load(f)
-    return []
+def get_embedding(text):
+    """Get embedding using OpenAI's API."""
+    try:
+        # Use Anthropic API key won't work for OpenAI embeddings
+        # Use a simple hash-based approach as fallback, or use OpenAI
+        response = requests.post(
+            'https://api.openai.com/v1/embeddings',
+            headers={
+                'Authorization': f'Bearer {os.environ.get("OPENAI_API_KEY", "")}',
+                'Content-Type': 'application/json'
+            },
+            json={
+                'model': 'text-embedding-ada-002',
+                'input': text[:8000]
+            }
+        )
+        if response.status_code == 200:
+            return response.json()['data'][0]['embedding']
+        return None
+    except Exception as e:
+        print(f"Embedding error: {str(e)}")
+        return None
 
-def save_memory(memories):
-    with open(MEMORY_FILE, 'w') as f:
-        json.dump(memories, f)
+def save_memory(text, memory_type='conversation', metadata=None):
+    """Save a memory to Pinecone."""
+    try:
+        embedding = get_embedding(text)
+        if not embedding:
+            return False
+        index = pc.Index(PINECONE_INDEX)
+        memory_id = str(uuid.uuid4())
+        meta = {
+            'text': text[:1000],
+            'type': memory_type,
+            'timestamp': time.time(),
+            'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        }
+        if metadata:
+            meta.update(metadata)
+        index.upsert(vectors=[{
+            'id': memory_id,
+            'values': embedding,
+            'metadata': meta
+        }])
+        print(f"Memory saved: {text[:50]}...")
+        return True
+    except Exception as e:
+        print(f"Save memory error: {str(e)}")
+        return False
+
+def search_memories(query, top_k=5):
+    """Search for relevant memories."""
+    try:
+        embedding = get_embedding(query)
+        if not embedding:
+            return []
+        index = pc.Index(PINECONE_INDEX)
+        results = index.query(
+            vector=embedding,
+            top_k=top_k,
+            include_metadata=True
+        )
+        memories = []
+        for match in results.matches:
+            if match.score > 0.75:  # Only highly relevant memories
+                memories.append({
+                    'text': match.metadata.get('text', ''),
+                    'date': match.metadata.get('date', ''),
+                    'type': match.metadata.get('type', ''),
+                    'score': match.score
+                })
+        return memories
+    except Exception as e:
+        print(f"Search memory error: {str(e)}")
+        return []
+
+def format_memories(memories):
+    """Format memories for injection into context."""
+    if not memories:
+        return ""
+    output = "\n\nRelevant memories from past conversations:\n"
+    for m in memories:
+        output += f"[{m['date']}] {m['text']}\n"
+    return output
 
 
 # ── Push Subscriptions ────────────────────────────────────────────────────────
@@ -109,14 +195,9 @@ def send_push(title, body, url=None):
                 vapid_private_key=VAPID_PRIVATE_KEY,
                 vapid_claims={'sub': VAPID_CLAIMS_EMAIL}
             )
-            print(f"Push sent: {title}")
             good_subs.append(sub)
         except WebPushException as e:
-            resp = e.response.text if hasattr(e, 'response') and e.response else 'no response'
-            print(f"Push error: {e} — {resp}")
-            if '400' in str(e) or '410' in str(e):
-                print("Removing invalid subscription")
-            else:
+            if '400' not in str(e) and '410' not in str(e):
                 good_subs.append(sub)
     save_subscriptions(good_subs)
 
@@ -174,53 +255,35 @@ def is_important_email(email):
     return True
 
 
-# ── Web Search (Serper + fallback to DuckDuckGo) ──────────────────────────────
+# ── Web Search ────────────────────────────────────────────────────────────────
 
 def web_search(query, num_results=5):
-    # Try Serper first for rich results
     if SERPER_API_KEY:
         try:
             response = requests.post(
                 'https://google.serper.dev/search',
-                headers={
-                    'X-API-KEY': SERPER_API_KEY,
-                    'Content-Type': 'application/json'
-                },
+                headers={'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json'},
                 json={'q': query, 'num': num_results}
             )
             data = response.json()
             output = f"Search results for '{query}':\n\n"
-
-            # Knowledge graph (quick facts)
             if data.get('knowledgeGraph'):
                 kg = data['knowledgeGraph']
                 output += f"Quick answer: {kg.get('title', '')} — {kg.get('description', '')}\n\n"
-
-            # Answer box
             if data.get('answerBox'):
                 ab = data['answerBox']
                 answer = ab.get('answer') or ab.get('snippet') or ''
                 if answer:
                     output += f"Direct answer: {answer}\n\n"
-
-            # Organic results with full snippets
             for i, r in enumerate(data.get('organic', [])[:num_results], 1):
-                output += f"{i}. {r.get('title', '')}\n"
-                output += f"   {r.get('link', '')}\n"
-                output += f"   {r.get('snippet', '')}\n\n"
-
-            # News results if available
+                output += f"{i}. {r.get('title', '')}\n   {r.get('link', '')}\n   {r.get('snippet', '')}\n\n"
             if data.get('news'):
                 output += "Latest news:\n"
                 for n in data['news'][:3]:
-                    output += f"• {n.get('title', '')} — {n.get('date', '')}\n"
-                    output += f"  {n.get('snippet', '')}\n\n"
-
+                    output += f"• {n.get('title', '')} — {n.get('date', '')}\n  {n.get('snippet', '')}\n\n"
             return output
         except Exception as e:
-            print(f"Serper error: {str(e)}, falling back to DuckDuckGo")
-
-    # Fallback to DuckDuckGo
+            print(f"Serper error: {str(e)}")
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=num_results))
@@ -229,46 +292,9 @@ def web_search(query, num_results=5):
                 for i, r in enumerate(results, 1):
                     output += f"{i}. {r['title']}\n{r['href']}\n{r['body']}\n\n"
                 return output
-            return "No results found."
+        return "No results found."
     except Exception as e:
         return f"Search error: {str(e)}"
-
-def deep_search(query):
-    """Enhanced search that fetches full article content for important queries."""
-    if not SERPER_API_KEY:
-        return web_search(query)
-    try:
-        response = requests.post(
-            'https://google.serper.dev/search',
-            headers={
-                'X-API-KEY': SERPER_API_KEY,
-                'Content-Type': 'application/json'
-            },
-            json={'q': query, 'num': 3}
-        )
-        data = response.json()
-        output = f"Deep search results for '{query}':\n\n"
-
-        if data.get('answerBox'):
-            ab = data['answerBox']
-            answer = ab.get('answer') or ab.get('snippet') or ''
-            if answer:
-                output += f"Direct answer: {answer}\n\n"
-
-        for r in data.get('organic', [])[:3]:
-            output += f"Source: {r.get('title', '')}\n"
-            output += f"URL: {r.get('link', '')}\n"
-            output += f"Summary: {r.get('snippet', '')}\n\n"
-
-        if data.get('news'):
-            output += "Recent news:\n"
-            for n in data['news'][:5]:
-                output += f"• [{n.get('date', '')}] {n.get('title', '')}\n"
-                output += f"  {n.get('snippet', '')}\n\n"
-
-        return output
-    except Exception as e:
-        return web_search(query)
 
 
 # ── Google Auth ───────────────────────────────────────────────────────────────
@@ -370,12 +396,7 @@ def get_upcoming_events(max_results=10):
         response = requests.get(
             'https://www.googleapis.com/calendar/v3/calendars/primary/events',
             headers={'Authorization': f'Bearer {access_token}'},
-            params={
-                'timeMin': now,
-                'maxResults': max_results,
-                'singleEvents': True,
-                'orderBy': 'startTime'
-            }
+            params={'timeMin': now, 'maxResults': max_results, 'singleEvents': True, 'orderBy': 'startTime'}
         )
         data = response.json()
         events = []
@@ -493,11 +514,11 @@ def monitor_inbox():
                             'read': False,
                             'timestamp': time.time()
                         })
-                        send_push(
-                            'Bina — Review Required',
-                            f'New message from {sender}. Open Bina to approve reply.',
-                            BINA_URL
+                        save_memory(
+                            f"Received email from {email['from']} about: {email['subject']}",
+                            memory_type='email'
                         )
+                        send_push('Bina — Review Required', f'New message from {sender}.', BINA_URL)
                         print(f"Important + push: {email['from']}")
                     else:
                         print(f"Filtered: {email['from']} - {email['subject']}")
@@ -570,28 +591,21 @@ def generate_vapid():
     try:
         private_key = ec.generate_private_key(ec.SECP256R1())
         pub_bytes = private_key.public_key().public_bytes(
-            serialization.Encoding.X962,
-            serialization.PublicFormat.UncompressedPoint
-        )
+            serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
         priv_numbers = private_key.private_numbers()
-        priv_int = priv_numbers.private_value
-        priv_raw = priv_int.to_bytes(32, 'big')
+        priv_raw = priv_numbers.private_value.to_bytes(32, 'big')
         pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b"=").decode()
         priv_b64 = base64.urlsafe_b64encode(priv_raw).rstrip(b"=").decode()
         keys_match = pub_b64.endswith(priv_b64) or priv_b64 in pub_b64
-        return f"""
-        <html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
+        return f"""<html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
         <h2>✅ Fresh VAPID Keys</h2>
-        <p>Public: {len(pub_b64)} chars | Private: {len(priv_b64)} chars</p>
-        <p style="color:{'red' if keys_match else '#0f0'}">Keys are {'OVERLAPPING - REFRESH' if keys_match else 'distinct ✅'}</p>
-        <br>
-        <p><b>VAPID_PUBLIC_KEY:</b></p>
-        <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{pub_b64}</textarea>
-        <br><br>
-        <p><b>VAPID_PRIVATE_KEY:</b></p>
-        <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{priv_b64}</textarea>
-        </body></html>
-        """
+        <p>Public: {len(pub_b64)} | Private: {len(priv_b64)}</p>
+        <p style="color:{'red' if keys_match else '#0f0'}">{'OVERLAPPING - REFRESH' if keys_match else 'distinct ✅'}</p>
+        <p><b>PUBLIC:</b></p>
+        <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;padding:8px;">{pub_b64}</textarea>
+        <p><b>PRIVATE:</b></p>
+        <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;padding:8px;">{priv_b64}</textarea>
+        </body></html>"""
     except Exception as e:
         import traceback
         return f'<pre style="color:red;padding:40px">{traceback.format_exc()}</pre>'
@@ -630,32 +644,33 @@ def send_draft():
 
 @app.route('/calendar', methods=['GET'])
 def get_calendar():
-    events = get_upcoming_events(max_results=10)
-    return jsonify({'events': events})
+    return jsonify({'events': get_upcoming_events(max_results=10)})
 
 @app.route('/calendar/create', methods=['POST'])
 def create_event_route():
     data = request.json
     success, link = create_calendar_event(
-        data.get('title'),
-        data.get('start'),
-        data.get('end'),
-        data.get('description', '')
-    )
+        data.get('title'), data.get('start'), data.get('end'), data.get('description', ''))
     return jsonify({'success': success, 'link': link})
 
 @app.route('/test-push')
 def test_push():
-    send_push('Bina 🔔', 'Test notification. Tap to open Bina.', BINA_URL)
-    return '<h2 style="font-family:monospace;color:green;padding:40px">✅ Push sent!</h2>'
+    send_push('Bina 🔔', 'Test notification.', BINA_URL)
+    return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Push sent!</h2>'
 
 @app.route('/test-email')
 def test_email():
     success, error = send_email('iirawgunzsii@gmail.com', 'Test from Bina', 'Hey! Bina testing.')
     if success:
         return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Email sent!</h2>'
-    else:
-        return f'<h2 style="color:red;font-family:monospace;padding:40px">❌ Failed: {error}</h2>'
+    return f'<h2 style="color:red;font-family:monospace;padding:40px">❌ Failed: {error}</h2>'
+
+@app.route('/memories', methods=['GET'])
+def get_memories():
+    """Debug route to see stored memories."""
+    query = request.args.get('q', 'Nathaniel')
+    memories = search_memories(query, top_k=10)
+    return jsonify({'memories': memories})
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -670,25 +685,23 @@ def chat():
     la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
     user_message_with_context = f"[Current date and time in Los Angeles: {la_time_str}]\n\n{user_message}"
 
-    # Smart search triggers — expanded for deeper queries
-    search_triggers = [
-        'search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
-        'current', 'price', 'stock', 'weather', 'research', 'tell me about',
-        'what happened', 'how is', 'how are', 'crypto', 'bitcoin', 'market',
-        'today', 'trending', 'recent', 'update', 'best', 'top', 'review'
-    ]
+    # Search relevant memories
+    memories = search_memories(user_message, top_k=5)
+    memory_context = format_memories(memories)
 
-    # Deep search triggers for more thorough research
-    deep_search_triggers = [
-        'research', 'deep dive', 'everything about', 'full report',
-        'analyze', 'investigate', 'background on', 'who is', 'tell me about'
-    ]
+    # Web search triggers
+    search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
+                       'current', 'price', 'stock', 'weather', 'research', 'tell me about',
+                       'what happened', 'crypto', 'bitcoin', 'market', 'today', 'trending',
+                       'recent', 'update', 'best', 'top', 'review', 'how is', 'how are']
+    deep_triggers = ['research', 'deep dive', 'everything about', 'full report',
+                     'analyze', 'investigate', 'background on', 'who is', 'tell me about']
 
     msg_lower = user_message.lower()
 
-    if any(word in msg_lower for word in deep_search_triggers):
-        search_results = deep_search(user_message)
-        user_message_with_context += f"\n\nDeep research results:\n{search_results}"
+    if any(word in msg_lower for word in deep_triggers):
+        search_results = web_search(user_message, num_results=5)
+        user_message_with_context += f"\n\nDeep research:\n{search_results}"
     elif any(word in msg_lower for word in search_triggers):
         search_results = web_search(user_message)
         user_message_with_context += f"\n\nSearch results:\n{search_results}"
@@ -700,14 +713,9 @@ def chat():
         events = get_upcoming_events(max_results=5)
         if events:
             events_text = "\n".join([f"- {e['title']} at {e['start']}" for e in events])
-            user_message_with_context += f"\n\nUpcoming calendar events:\n{events_text}"
+            user_message_with_context += f"\n\nUpcoming events:\n{events_text}"
         else:
             user_message_with_context += "\n\nCalendar is currently empty."
-
-    memories = load_memory()
-    memory_context = ""
-    if memories:
-        memory_context = "\n\nThings Nathaniel has told you to remember:\n" + "\n".join(memories[-15:])
 
     messages = conversation_history + [{"role": "user", "content": user_message_with_context}]
 
@@ -723,11 +731,14 @@ def chat():
     calendar_results = process_calendar_commands(assistant_message)
     display_message = clean_response(assistant_message)
 
-    # Auto-save to memory
-    memory_triggers = ['remember', 'save', 'note', 'important', "don't forget", 'keep in mind']
+    # Save conversation to memory automatically
+    memory_text = f"Nathaniel said: {user_message} | Bina responded: {display_message[:200]}"
+    save_memory(memory_text, memory_type='conversation')
+
+    # Save explicit memories
+    memory_triggers = ['remember', 'save', 'note', 'important', "don't forget", 'keep in mind', 'remind me']
     if any(word in msg_lower for word in memory_triggers):
-        memories.append(f"[{la_time_str}] {user_message}")
-        save_memory(memories)
+        save_memory(f"IMPORTANT - Nathaniel said to remember: {user_message}", memory_type='explicit')
 
     result = {'response': display_message}
     if email_results:
@@ -736,6 +747,7 @@ def chat():
         if sent:
             result['email_sent'] = f"✅ Email sent to {sent[0]['to']}"
             send_push('Bina ✅', f'Message sent to {sent[0]["to"]}', BINA_URL)
+            save_memory(f"Sent email to {sent[0]['to']} with subject: {sent[0]['subject']}", memory_type='email')
         if failed:
             result['email_error'] = f"❌ Email failed: {failed[0]['error']}"
     if calendar_results:
@@ -743,6 +755,7 @@ def chat():
         if created:
             result['event_created'] = f"📅 Event created: {created[0]['title']}"
             send_push('Bina 📅', f'"{created[0]["title"]}" added to your calendar', BINA_URL)
+            save_memory(f"Created calendar event: {created[0]['title']}", memory_type='calendar')
 
     return jsonify(result)
 
@@ -779,20 +792,13 @@ def oauth_callback():
     })
     tokens = token_response.json()
     refresh_token = tokens.get('refresh_token', '')
-    if not refresh_token:
-        note = "⚠️ No refresh token. Revoke access at myaccount.google.com/permissions then try again."
-    else:
-        note = "✅ Copy the token and set it as GOOGLE_REFRESH_TOKEN in Railway."
-    return f"""
-    <html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
+    note = "✅ Copy token to GOOGLE_REFRESH_TOKEN in Railway." if refresh_token else "⚠️ No refresh token."
+    return f"""<html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
     <h2>OAuth Callback</h2>
-    <p><b>Refresh Token:</b></p>
-    <textarea style="width:100%;height:80px;background:#111;color:#0f0;font-size:13px;padding:8px;">{refresh_token}</textarea>
-    <br><br><p>{note}</p>
-    <p><b>Full response:</b></p>
+    <textarea style="width:100%;height:80px;background:#111;color:#0f0;padding:8px;">{refresh_token}</textarea>
+    <p>{note}</p>
     <pre style="background:#111;padding:10px;color:#ff0;">{json.dumps(tokens, indent=2)}</pre>
-    </body></html>
-    """
+    </body></html>"""
 
 
 # ── Start monitor thread ──────────────────────────────────────────────────────
