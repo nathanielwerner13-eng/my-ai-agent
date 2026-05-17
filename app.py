@@ -46,32 +46,27 @@ ABOUT NATHANIEL:
 - Entrepreneur focused on building autonomous income systems
 - Interested in crypto, investments, Polymarket, TikTok/content, business automation
 - Watches: Bitcoin, Ethereum, Solana, Chainlink, Render
-- Interested in US politics, world politics, prediction markets
+- Interested in US politics, world politics, prediction markets, weather markets
 - Building toward financial freedom and passive income
 - Direct, ambitious, moves fast, hates wasted time
 - Jewish background (uses Hebrew greetings occasionally)
 
 YOUR ROLE:
-You are Nathaniel's personal chief of staff, business partner, and autonomous agent. You think ahead, spot opportunities, and help him execute fast. You treat him as a capable adult and never add unnecessary caveats or warnings.
+You are Nathaniel's personal chief of staff, business partner, and autonomous agent. You think ahead, spot opportunities, and help him execute fast.
 
 YOUR CAPABILITIES:
 - Send emails: SEND_EMAIL|to@email.com|Subject|Body END_EMAIL
 - Create calendar events: CREATE_EVENT|Title|2026-05-17T10:00:00|2026-05-17T11:00:00|Description END_EVENT
-- Deep web search with full article content (automatically triggered)
-- Persistent memory across ALL conversations
-- Overnight research: Polymarket, crypto, political news synthesis
-- Live crypto prices and Polymarket odds on demand
+- Deep web search, persistent memory, live crypto/Polymarket/commodities data
 
 CRITICAL MEMORY INSTRUCTIONS:
-You have access to Nathaniel's memories. Reference them naturally. Never ignore relevant memories.
+Reference memories naturally. Never ignore relevant memories.
 
 PERSONALITY:
 - Sharp, direct, no fluff
-- Proactive — tell him what he should know before he asks
-- Think like a brilliant chief of staff who is always one step ahead
-- Feel like a real relationship, not a tool
-- Be concise unless depth is needed
 - Write like a smart friend texting — not a formal report
+- Be concise unless depth is needed
+- Only recommend positions when you have real data to back it up
 
 The current date and time in Los Angeles will be injected into every message."""
 
@@ -150,7 +145,7 @@ def get_all_context_memories(user_message):
 def format_memories(memories):
     if not memories:
         return ""
-    output = "\n\nWhat you remember about Nathaniel (USE THIS — reference relevant memories naturally):\n"
+    output = "\n\nWhat you remember about Nathaniel:\n"
     for m in memories:
         output += f"• [{m['date']}] {m['text']}\n"
     return output
@@ -255,18 +250,14 @@ def web_search(query, num_results=5):
             )
             data = response.json()
             output = f"Search results for '{query}':\n\n"
-            if data.get('knowledgeGraph'):
-                kg = data['knowledgeGraph']
-                output += f"Quick answer: {kg.get('title', '')} — {kg.get('description', '')}\n\n"
             if data.get('answerBox'):
                 ab = data['answerBox']
                 answer = ab.get('answer') or ab.get('snippet') or ''
                 if answer:
                     output += f"Direct answer: {answer}\n\n"
             for i, r in enumerate(data.get('organic', [])[:num_results], 1):
-                output += f"{i}. {r.get('title', '')}\n   {r.get('link', '')}\n   {r.get('snippet', '')}\n\n"
+                output += f"{i}. {r.get('title', '')}\n   {r.get('snippet', '')}\n\n"
             if data.get('news'):
-                output += "Latest news:\n"
                 for n in data['news'][:3]:
                     output += f"• {n.get('title', '')} — {n.get('date', '')}\n  {n.get('snippet', '')}\n\n"
             return output
@@ -276,60 +267,153 @@ def web_search(query, num_results=5):
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=num_results))
             if results:
-                output = f"Search results for '{query}':\n\n"
-                for i, r in enumerate(results, 1):
-                    output += f"{i}. {r['title']}\n{r['href']}\n{r['body']}\n\n"
-                return output
+                return "\n".join([f"{r['title']}: {r['body']}" for r in results])
         return "No results found."
     except Exception as e:
         return f"Search error: {str(e)}"
 
 
-# ── Polymarket ────────────────────────────────────────────────────────────────
+# ── Polymarket with REAL ODDS ─────────────────────────────────────────────────
 
-def get_polymarket_markets(limit=50):
+def get_polymarket_markets_with_odds(limit=100):
+    """Get markets including actual YES/NO prices."""
     try:
         response = requests.get(
             'https://gamma-api.polymarket.com/markets',
             params={'limit': limit, 'active': 'true', 'closed': 'false'},
             timeout=15
         )
-        if response.status_code == 200:
-            return response.json()
-        return []
+        if response.status_code != 200:
+            return []
+
+        markets = response.json()
+        processed = []
+
+        for m in markets:
+            title = m.get('question', m.get('title', ''))
+            volume = m.get('volume', 0) or 0
+            try:
+                volume = float(str(volume).replace(',', ''))
+            except:
+                volume = 0
+
+            # Get actual odds - outcomePrices is a JSON string of prices
+            yes_price = None
+            no_price = None
+            try:
+                outcome_prices = m.get('outcomePrices', '[]')
+                if isinstance(outcome_prices, str):
+                    prices = json.loads(outcome_prices)
+                elif isinstance(outcome_prices, list):
+                    prices = outcome_prices
+                else:
+                    prices = []
+
+                if len(prices) >= 2:
+                    yes_price = float(prices[0])
+                    no_price = float(prices[1])
+                elif len(prices) == 1:
+                    yes_price = float(prices[0])
+                    no_price = 1 - yes_price
+            except:
+                pass
+
+            processed.append({
+                'title': title,
+                'volume': volume,
+                'yes_price': yes_price,
+                'no_price': no_price,
+                'end_date': m.get('endDate', ''),
+                'tags': [t.get('label', '') if isinstance(t, dict) else str(t)
+                         for t in (m.get('tags') or [])],
+            })
+
+        return processed
     except Exception as e:
         print(f"Polymarket error: {str(e)}")
         return []
 
-def analyze_polymarket_opportunities(markets):
-    if not markets:
-        return "No Polymarket data available."
-    output = f"Polymarket Analysis ({len(markets)} active markets):\n\n"
-    political_markets = []
+def categorize_polymarket(markets):
+    """Categorize markets and find genuine opportunities."""
+    political = []
     crypto_markets = []
+    weather = []
+    economics = []
+    other = []
+
     for m in markets:
-        title = str(m.get('question', m.get('title', ''))).lower()
-        volume = m.get('volume', 0) or 0
-        try:
-            volume = float(str(volume).replace(',', ''))
-        except:
-            volume = 0
-        market_info = {'title': m.get('question', m.get('title', 'Unknown')), 'volume': volume}
-        if any(word in title for word in ['president', 'election', 'congress', 'senate', 'trump',
-                'biden', 'democrat', 'republican', 'war', 'nato', 'ukraine', 'china', 'iran',
-                'israel', 'political', 'vote', 'prime minister', 'fed', 'federal reserve', 'tariff']):
-            political_markets.append(market_info)
-        elif any(word in title for word in ['bitcoin', 'btc', 'eth', 'crypto', 'solana', 'coin']):
-            crypto_markets.append(market_info)
-    political_markets.sort(key=lambda x: x['volume'], reverse=True)
-    crypto_markets.sort(key=lambda x: x['volume'], reverse=True)
-    output += f"Political: {len(political_markets)} markets | Crypto: {len(crypto_markets)} markets\n\n"
-    output += "TOP POLITICAL BY VOLUME:\n"
-    for m in political_markets[:10]:
-        output += f"• {m['title']} | Vol: ${m['volume']:,.0f}\n"
-    output += "\nTOP CRYPTO PREDICTION MARKETS:\n"
-    for m in crypto_markets[:5]:
-        output += f"• {m['title']} | Vol: ${m['volume']:,.0f}\n"
+        title = m['title'].lower()
+        tags = [t.lower() for t in m.get('tags', [])]
+
+        if any(w in title or w in ' '.join(tags) for w in
+               ['weather', 'temperature', 'rain', 'snow', 'hurricane', 'tornado',
+                'flood', 'storm', 'celsius', 'fahrenheit', 'precipitation']):
+            weather.append(m)
+        elif any(w in title or w in ' '.join(tags) for w in
+                 ['bitcoin', 'btc', 'eth', 'crypto', 'solana', 'coin', 'token', 'defi', 'nft']):
+            crypto_markets.append(m)
+        elif any(w in title or w in ' '.join(tags) for w in
+                 ['fed', 'federal reserve', 'rate', 'gdp', 'inflation', 'recession',
+                  'oil', 'gold', 'stock', 'nasdaq', 's&p', 'dow', 'economy']):
+            economics.append(m)
+        elif any(w in title or w in ' '.join(tags) for w in
+                 ['president', 'election', 'congress', 'senate', 'trump', 'biden',
+                  'democrat', 'republican', 'war', 'nato', 'ukraine', 'china', 'iran',
+                  'israel', 'vote', 'prime minister', 'tariff', 'trade', 'geopolit']):
+            political.append(m)
+        else:
+            other.append(m)
+
+    # Sort by volume
+    for lst in [political, crypto_markets, weather, economics]:
+        lst.sort(key=lambda x: x['volume'], reverse=True)
+
+    return {
+        'political': political[:15],
+        'crypto': crypto_markets[:10],
+        'weather': weather[:10],
+        'economics': economics[:10]
+    }
+
+def format_markets_for_analysis(categorized):
+    """Format market data with real odds for Claude to analyze."""
+    output = ""
+
+    def format_category(name, markets):
+        if not markets:
+            return ""
+        result = f"\n{name.upper()} MARKETS (with real YES/NO prices):\n"
+        for m in markets[:8]:
+            yes = m.get('yes_price')
+            no = m.get('no_price')
+            vol = m.get('volume', 0)
+            if yes is not None:
+                result += f"• {m['title']}\n  YES: {yes:.1%} | NO: {no:.1%} | Vol: ${vol:,.0f}\n"
+            else:
+                result += f"• {m['title']}\n  Vol: ${vol:,.0f} (odds unavailable)\n"
+        return result
+
+    output += format_category("Political", categorized['political'])
+    output += format_category("Crypto Prediction", categorized['crypto'])
+    output += format_category("Weather", categorized['weather'])
+    output += format_category("Economic", categorized['economics'])
+
+    return output
+
+
+# ── Commodities (Gold & Oil) ──────────────────────────────────────────────────
+
+def get_commodities_data():
+    """Get gold and oil prices."""
+    output = "\nCOMMODITIES:\n"
+    try:
+        # Gold price via Yahoo Finance alternative
+        gold_res = web_search("gold price per ounce today USD", num_results=2)
+        oil_res = web_search("crude oil WTI price today USD per barrel", num_results=2)
+        output += f"Gold search: {gold_res[:200]}\n"
+        output += f"Oil search: {oil_res[:200]}\n"
+    except Exception as e:
+        output += f"Commodities unavailable: {str(e)}\n"
     return output
 
 
@@ -352,7 +436,6 @@ def get_crypto_data():
             return response.json()
         return {}
     except Exception as e:
-        print(f"Crypto error: {str(e)}")
         return {}
 
 def get_fear_greed_index():
@@ -361,7 +444,7 @@ def get_fear_greed_index():
         if response.status_code == 200:
             return response.json()['data'][0]
         return {}
-    except Exception as e:
+    except:
         return {}
 
 def format_crypto_report(crypto_data, fear_greed):
@@ -374,7 +457,7 @@ def format_crypto_report(crypto_data, fear_greed):
         'chainlink': 'Chainlink (LINK)',
         'render-token': 'Render (RNDR)'
     }
-    output = "**Crypto Market Report**\n\n"
+    output = "**Crypto Prices**\n"
     if fear_greed:
         val = fear_greed.get('value', 'N/A')
         label = fear_greed.get('value_classification', 'N/A')
@@ -395,112 +478,182 @@ def research_political_news():
     queries = [
         "US politics breaking news today",
         "world politics major events today",
-        "Federal Reserve interest rates news",
-        "geopolitical conflict news today",
-        "Trump administration policy news today",
-        "China US trade relations news",
-        "Middle East conflict news today",
-        "economic recession inflation news today",
-        "stock market political impact today",
-        "prediction market political odds movement today"
+        "Federal Reserve interest rate decision news",
+        "Trump policy announcement today",
+        "China US relations geopolitical news today",
+        "Middle East war news today",
+        "Ukraine Russia war news today",
+        "economic data inflation jobs report today",
+        "oil gold commodity market news today"
     ]
     all_results = ""
     for query in queries:
         result = web_search(query, num_results=2)
-        all_results += f"\n{result}\n"
+        all_results += f"[{query}]:\n{result}\n\n"
         time.sleep(1)
     return all_results
+
+
+# ── Weather Research ──────────────────────────────────────────────────────────
+
+def research_weather_for_markets(weather_markets):
+    """Research actual weather data for active weather prediction markets."""
+    if not weather_markets:
+        return "No weather markets found."
+
+    output = "WEATHER MARKET RESEARCH:\n"
+    for m in weather_markets[:5]:
+        title = m['title']
+        yes = m.get('yes_price')
+        no = m.get('no_price')
+        # Search for relevant weather data
+        search_query = f"weather forecast {title}"
+        result = web_search(search_query, num_results=2)
+        odds_str = f"YES: {yes:.1%} | NO: {no:.1%}" if yes else "odds N/A"
+        output += f"\nMarket: {title}\nCurrent odds: {odds_str}\nWeather data: {result[:300]}\n"
+        time.sleep(0.5)
+    return output
 
 
 # ── Overnight Research ────────────────────────────────────────────────────────
 
 def run_overnight_research():
-    print("Starting overnight research engine...")
+    print("Starting overnight research...")
     report = {
         'date': datetime.datetime.now().strftime('%Y-%m-%d'),
         'time': datetime.datetime.now().strftime('%H:%M'),
         'polymarket': '',
         'crypto': '',
         'political': '',
+        'weather': '',
+        'commodities': '',
         'synthesis': ''
     }
 
-    print("Scanning Polymarket...")
+    # Step 1 — Polymarket with real odds
+    print("Scanning Polymarket with odds...")
     try:
-        markets = get_polymarket_markets(limit=100)
-        poly_analysis = analyze_polymarket_opportunities(markets)
-        report['polymarket'] = poly_analysis
-        save_memory(f"Polymarket scan: {poly_analysis[:500]}", memory_type='research')
-        print(f"Polymarket: {len(markets)} markets")
+        markets = get_polymarket_markets_with_odds(limit=100)
+        categorized = categorize_polymarket(markets)
+        poly_formatted = format_markets_for_analysis(categorized)
+        report['polymarket'] = poly_formatted
+        report['weather_markets'] = categorized.get('weather', [])
+        save_memory(f"Polymarket scan with odds: {poly_formatted[:500]}", memory_type='research')
+        print(f"Polymarket: {len(markets)} markets with odds")
     except Exception as e:
         report['polymarket'] = f"Polymarket unavailable: {str(e)}"
+        print(f"Polymarket error: {str(e)}")
 
     time.sleep(10)
 
+    # Step 2 — Crypto
     print("Scanning crypto...")
     try:
         crypto_data = get_crypto_data()
         fear_greed = get_fear_greed_index()
         crypto_report = format_crypto_report(crypto_data, fear_greed)
         report['crypto'] = crypto_report
-        save_memory(f"Crypto scan: {crypto_report[:500]}", memory_type='research')
         print("Crypto done")
     except Exception as e:
         report['crypto'] = f"Crypto unavailable: {str(e)}"
 
-    time.sleep(10)
+    time.sleep(5)
 
+    # Step 3 — Commodities
+    print("Getting commodities...")
+    try:
+        commodities = get_commodities_data()
+        report['commodities'] = commodities
+        print("Commodities done")
+    except Exception as e:
+        report['commodities'] = f"Commodities unavailable: {str(e)}"
+
+    time.sleep(5)
+
+    # Step 4 — Political news
     print("Researching political news...")
     try:
         political_data = research_political_news()
         report['political'] = political_data[:3000]
-        save_memory(f"Political research: {political_data[:500]}", memory_type='research')
         print("Political done")
     except Exception as e:
         report['political'] = f"Political unavailable: {str(e)}"
 
+    time.sleep(5)
+
+    # Step 5 — Weather markets
+    print("Researching weather markets...")
+    try:
+        weather_markets = report.get('weather_markets', [])
+        if weather_markets:
+            weather_research = research_weather_for_markets(weather_markets)
+            report['weather'] = weather_research
+            print("Weather done")
+        else:
+            report['weather'] = "No active weather markets found."
+    except Exception as e:
+        report['weather'] = f"Weather research unavailable: {str(e)}"
+
     time.sleep(10)
 
+    # Step 6 — Synthesize
     print("Synthesizing...")
     try:
-        synthesis_prompt = f"""You are Bina, texting Nathaniel (18, Beverly Hills entrepreneur) his morning intelligence report. 
+        synthesis_prompt = f"""You are Bina, texting Nathaniel (18, Beverly Hills) his morning intelligence report.
 
-Write like a smart friend who did research overnight and is texting him what matters. Short punchy sentences. No formal report style. Use **bold** for important numbers and names. Use bullet points sparingly.
+IMPORTANT: Only recommend positions where you have REAL ODDS DATA. If a market shows YES at 95%+, there is NO edge — don't recommend it. Only flag markets where the price seems WRONG based on real world data.
 
-DATA YOU ANALYZED:
+DATA:
 
-POLYMARKET:
+POLYMARKET MARKETS WITH REAL ODDS:
 {report['polymarket']}
 
-CRYPTO:
+CRYPTO PRICES:
 {report['crypto']}
 
+COMMODITIES:
+{report['commodities']}
+
 POLITICAL NEWS:
-{report['political'][:2000]}
+{report['political'][:1500]}
 
-Structure your message like this:
+WEATHER MARKETS:
+{report['weather'][:1000]}
 
-## What I found overnight
+Write like a smart friend texting him. Use **bold** for numbers. Keep it under 400 words.
 
-Start with the single most interesting thing you found — one punchy sentence.
+Structure:
 
-## Top 3 plays right now
+## What I found
 
-For each one: name it, tell him the position (YES/NO/BUY/SELL), confidence level (HIGH/MEDIUM/LOW), and explain WHY in 2 sentences max. Be specific — name the exact market or coin.
+One sentence — the most interesting thing.
 
-## What to watch today
+## Top plays right now
 
-2-3 political or market events in the next 24h that could create opportunities. One line each.
+For each play:
+- Name the exact market or asset
+- Current price/odds (use real numbers from the data)
+- Your position: YES/NO/BUY/SELL
+- Confidence: HIGH/MEDIUM/LOW
+- Why in 1-2 sentences using actual data
 
-## The edge nobody's seeing
+ONLY recommend if you see a genuine mismatch between odds and reality. If YES is already at 90%+, skip it.
 
-One contrarian or non-obvious insight from your research. Make it interesting.
+## Weather market play (if any)
 
-Keep the whole thing under 400 words. Write like you actually care about him making money."""
+If there's a weather market where you can cross-reference actual forecast data vs current odds, flag it specifically.
+
+## Watch today
+
+2-3 specific events in next 24h that could create opportunities.
+
+## The contrarian take
+
+One non-obvious insight backed by the data."""
 
         response = client.messages.create(
             model="claude-sonnet-4-5",
-            max_tokens=1000,
+            max_tokens=1200,
             messages=[{"role": "user", "content": synthesis_prompt}]
         )
         report['synthesis'] = response.content[0].text
@@ -510,14 +663,15 @@ Keep the whole thing under 400 words. Write like you actually care about him mak
         report['synthesis'] = f"Synthesis error: {str(e)}"
         print(f"Synthesis error: {str(e)}")
 
+    # Save and deliver
     try:
+        save_data = {k: v for k, v in report.items() if k != 'weather_markets'}
         with open(OVERNIGHT_REPORT_FILE, 'w') as f:
-            json.dump(report, f)
-        print("Report saved")
+            json.dump(save_data, f)
     except Exception as e:
         print(f"Save error: {str(e)}")
 
-    print("Research complete — delivering now")
+    print("Research complete — delivering")
     deliver_report(report)
     return report
 
@@ -529,49 +683,44 @@ def deliver_report(report=None):
                 with open(OVERNIGHT_REPORT_FILE, 'r') as f:
                     report = json.load(f)
             except:
-                print("Could not load report file")
                 return
         else:
-            print("No report available")
             return
 
-    synthesis = report.get('synthesis', '')
-    crypto = report.get('crypto', '')
-    polymarket = report.get('polymarket', '')
     date = report.get('date', datetime.datetime.now().strftime('%Y-%m-%d'))
     report_time = report.get('time', '')
 
-    if synthesis:
+    if report.get('synthesis'):
         add_notification({
             'id': f'intel-{date}-{int(time.time())}',
             'type': 'intelligence',
             'subject': f'🧠 Intelligence Report — {date}',
             'from': 'Bina Research Engine',
-            'body': synthesis,
+            'body': report['synthesis'],
             'draft_reply': '',
             'read': False,
             'timestamp': time.time()
         })
 
-    if crypto and 'unavailable' not in crypto.lower():
+    if report.get('crypto') and 'unavailable' not in report['crypto'].lower():
         add_notification({
             'id': f'crypto-{date}-{int(time.time())}',
             'type': 'intelligence',
             'subject': '📊 Crypto Snapshot',
             'from': 'Bina Markets',
-            'body': crypto,
+            'body': report['crypto'],
             'draft_reply': '',
             'read': False,
             'timestamp': time.time()
         })
 
-    if polymarket and 'unavailable' not in polymarket.lower():
+    if report.get('polymarket') and 'unavailable' not in report['polymarket'].lower():
         add_notification({
             'id': f'poly-{date}-{int(time.time())}',
             'type': 'intelligence',
-            'subject': '🎯 Polymarket Markets',
+            'subject': '🎯 Polymarket — Live Odds',
             'from': 'Bina Markets',
-            'body': polymarket,
+            'body': report['polymarket'],
             'draft_reply': '',
             'read': False,
             'timestamp': time.time()
@@ -579,7 +728,7 @@ def deliver_report(report=None):
 
     send_push(
         '🧠 Bina — Intel Ready',
-        'Overnight research done. Check your Intel Feed.',
+        'Overnight research done. Check Intel Feed.',
         BINA_URL + '?open=feed',
         notif_type='feed'
     )
@@ -618,8 +767,7 @@ def send_email(to, subject, body):
         )
         if response.status_code == 200:
             return True, None
-        else:
-            return False, str(response.json())
+        return False, str(response.json())
     except Exception as e:
         return False, str(e)
 
@@ -632,9 +780,8 @@ def get_inbox_emails(max_results=10):
             params={'maxResults': max_results, 'labelIds': 'INBOX', 'q': 'is:unread'}
         )
         data = response.json()
-        messages = data.get('messages', [])
         emails = []
-        for msg in messages:
+        for msg in data.get('messages', []):
             msg_response = requests.get(
                 f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg["id"]}',
                 headers={'Authorization': f'Bearer {access_token}'},
@@ -668,8 +815,8 @@ def draft_reply(email):
         response = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=500,
-            system="You are Bina, drafting a reply on behalf of Nathaniel Werner, 18-year-old entrepreneur in Beverly Hills. Write a concise, professional reply. Just write the reply body only — no subject line, no greeting header, just the message text and sign off with Nathaniel Werner.",
-            messages=[{"role": "user", "content": f"Draft a reply to this email:\n\nFrom: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"}]
+            system="You are Bina, drafting a reply on behalf of Nathaniel Werner, 18-year-old entrepreneur in Beverly Hills. Write a concise, professional reply. Just the reply body, sign off with Nathaniel Werner.",
+            messages=[{"role": "user", "content": f"Draft a reply:\n\nFrom: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"}]
         )
         return response.content[0].text
     except Exception as e:
@@ -687,29 +834,20 @@ def get_upcoming_events(max_results=10):
             headers={'Authorization': f'Bearer {access_token}'},
             params={'timeMin': now, 'maxResults': max_results, 'singleEvents': True, 'orderBy': 'startTime'}
         )
-        data = response.json()
         events = []
-        for item in data.get('items', []):
+        for item in response.json().get('items', []):
             start = item['start'].get('dateTime', item['start'].get('date', ''))
             end = item['end'].get('dateTime', item['end'].get('date', ''))
-            events.append({
-                'id': item['id'],
-                'title': item.get('summary', '(no title)'),
-                'start': start,
-                'end': end,
-                'description': item.get('description', '')
-            })
+            events.append({'id': item['id'], 'title': item.get('summary', '(no title)'), 'start': start, 'end': end})
         return events
     except Exception as e:
-        print(f"Calendar read error: {str(e)}")
         return []
 
 def create_calendar_event(title, start, end, description=''):
     try:
         access_token = get_access_token()
         event = {
-            'summary': title,
-            'description': description,
+            'summary': title, 'description': description,
             'start': {'dateTime': start, 'timeZone': 'America/Los_Angeles'},
             'end': {'dateTime': end, 'timeZone': 'America/Los_Angeles'}
         }
@@ -720,8 +858,7 @@ def create_calendar_event(title, start, end, description=''):
         )
         if response.status_code in [200, 201]:
             return True, response.json().get('htmlLink', '')
-        else:
-            return False, str(response.json())
+        return False, str(response.json())
     except Exception as e:
         return False, str(e)
 
@@ -730,9 +867,7 @@ def process_calendar_commands(text):
     matches = re.findall(pattern, text, re.DOTALL)
     results = []
     for match in matches:
-        title = match[0].strip()
-        start = match[1].strip()
-        end = match[2].strip()
+        title, start, end = match[0].strip(), match[1].strip(), match[2].strip()
         description = match[3].strip() if match[3] else ''
         success, link = create_calendar_event(title, start, end, description)
         results.append({'title': title, 'success': success, 'link': link})
@@ -755,8 +890,7 @@ def master_monitor():
             if la_hour == 0 and la_day != last_overnight_day:
                 last_overnight_day = la_day
                 print("Midnight — launching overnight research")
-                t = threading.Thread(target=run_overnight_research, daemon=True)
-                t.start()
+                threading.Thread(target=run_overnight_research, daemon=True).start()
 
             if la_hour == 7 and la_day != last_briefing_day:
                 last_briefing_day = la_day
@@ -768,7 +902,7 @@ def master_monitor():
                     response = client.messages.create(
                         model="claude-sonnet-4-5",
                         max_tokens=300,
-                        system="You are Bina texting Nathaniel his morning briefing. Be like a smart friend — short, punchy, actionable. Use **bold** for important things.",
+                        system="You are Bina texting Nathaniel his morning briefing. Short, punchy, actionable. Use **bold** for important things.",
                         messages=[{"role": "user", "content": f"Morning briefing.\nSchedule:\n{events_text}\nEmails:\n{emails_text}"}]
                     )
                     add_notification({
@@ -803,15 +937,14 @@ def master_monitor():
                             'read': False,
                             'timestamp': time.time()
                         })
-                        save_memory(f"Received email from {email['from']} about: {email['subject']}", memory_type='email')
+                        save_memory(f"Email from {email['from']}: {email['subject']}", memory_type='email')
                         send_push('Bina — New Email', f'From {sender}: {email["subject"]}', BINA_URL + '?open=inbox', notif_type='email')
                     else:
-                        print(f"Filtered: {email['from']} - {email['subject']}")
+                        print(f"Filtered: {email['from']}")
             save_seen_emails(seen)
 
         except Exception as e:
             print(f"Monitor error: {str(e)}")
-
         time.sleep(60)
 
 
@@ -849,7 +982,7 @@ def service_worker():
 @app.route('/clear-subs')
 def clear_subs():
     save_subscriptions([])
-    return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Subscriptions cleared!</h2>'
+    return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Cleared!</h2>'
 
 @app.route('/subscribe', methods=['POST'])
 def subscribe():
@@ -869,15 +1002,12 @@ def vapid_key():
 def generate_vapid():
     try:
         private_key = ec.generate_private_key(ec.SECP256R1())
-        pub_bytes = private_key.public_key().public_bytes(
-            serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
-        priv_numbers = private_key.private_numbers()
-        priv_raw = priv_numbers.private_value.to_bytes(32, 'big')
+        pub_bytes = private_key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+        priv_raw = private_key.private_numbers().private_value.to_bytes(32, 'big')
         pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b"=").decode()
         priv_b64 = base64.urlsafe_b64encode(priv_raw).rstrip(b"=").decode()
-        keys_match = pub_b64.endswith(priv_b64) or priv_b64 in pub_b64
         return f"""<html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
-        <h2>VAPID Keys</h2><p>{'OVERLAPPING' if keys_match else 'distinct ✅'}</p>
+        <h2>VAPID Keys</h2>
         <p><b>PUBLIC:</b></p><textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;padding:8px;">{pub_b64}</textarea>
         <p><b>PRIVATE:</b></p><textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;padding:8px;">{priv_b64}</textarea>
         </body></html>"""
@@ -903,9 +1033,7 @@ def mark_read(notif_id):
 @app.route('/send-draft', methods=['POST'])
 def send_draft():
     data = request.json
-    to = data.get('to')
-    subject = data.get('subject')
-    body = data.get('body')
+    to, subject, body = data.get('to'), data.get('subject'), data.get('body')
     success, error = send_email(to, f"Re: {subject}", body)
     if success:
         notifications = load_notifications()
@@ -924,8 +1052,7 @@ def get_calendar():
 @app.route('/calendar/create', methods=['POST'])
 def create_event_route():
     data = request.json
-    success, link = create_calendar_event(
-        data.get('title'), data.get('start'), data.get('end'), data.get('description', ''))
+    success, link = create_calendar_event(data.get('title'), data.get('start'), data.get('end'), data.get('description', ''))
     return jsonify({'success': success, 'link': link})
 
 @app.route('/test-push')
@@ -935,8 +1062,7 @@ def test_push():
 
 @app.route('/test-research')
 def test_research():
-    t = threading.Thread(target=run_overnight_research, daemon=True)
-    t.start()
+    threading.Thread(target=run_overnight_research, daemon=True).start()
     return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Research started! Check Intel Feed in ~5 minutes.</h2>'
 
 @app.route('/deliver-report')
@@ -953,15 +1079,13 @@ def test_email():
 
 @app.route('/crypto')
 def get_crypto_route():
-    data = get_crypto_data()
-    fg = get_fear_greed_index()
-    return jsonify({'crypto': data, 'fear_greed': fg})
+    return jsonify({'crypto': get_crypto_data(), 'fear_greed': get_fear_greed_index()})
 
 @app.route('/polymarket')
 def get_polymarket_route():
-    markets = get_polymarket_markets(limit=50)
-    analysis = analyze_polymarket_opportunities(markets)
-    return jsonify({'count': len(markets), 'analysis': analysis})
+    markets = get_polymarket_markets_with_odds(limit=50)
+    categorized = categorize_polymarket(markets)
+    return jsonify({'count': len(markets), 'formatted': format_markets_for_analysis(categorized)})
 
 @app.route('/memories', methods=['GET'])
 def get_memories_route():
@@ -983,30 +1107,29 @@ def chat():
     memory_context = format_memories(all_memories)
     msg_lower = user_message.lower()
 
-    if any(word in msg_lower for word in ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth',
-                                           'solana', 'sol', 'price', 'market cap', 'coin']):
+    if any(word in msg_lower for word in ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 'solana', 'sol', 'price', 'coin']):
         crypto_data = get_crypto_data()
         fear_greed = get_fear_greed_index()
         user_message_with_context += f"\n\nLive crypto:\n{format_crypto_report(crypto_data, fear_greed)}"
 
-    if any(word in msg_lower for word in ['polymarket', 'prediction market', 'odds', 'bet']):
-        markets = get_polymarket_markets(limit=30)
-        user_message_with_context += f"\n\nLive Polymarket:\n{analyze_polymarket_opportunities(markets)}"
+    if any(word in msg_lower for word in ['polymarket', 'prediction market', 'odds', 'bet', 'market']):
+        markets = get_polymarket_markets_with_odds(limit=50)
+        categorized = categorize_polymarket(markets)
+        user_message_with_context += f"\n\nLive Polymarket with odds:\n{format_markets_for_analysis(categorized)}"
 
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'stock', 'weather', 'research', 'tell me about', 'what happened',
-                       'today', 'trending', 'recent', 'update', 'best', 'top', 'political', 'politics']
+                       'today', 'trending', 'recent', 'update', 'best', 'top', 'political', 'politics',
+                       'gold', 'oil', 'commodity']
     deep_triggers = ['research', 'deep dive', 'everything about', 'full report', 'analyze',
-                     'investigate', 'background on', 'who is', 'tell me about']
+                     'investigate', 'background on', 'tell me about']
 
     if any(word in msg_lower for word in deep_triggers):
         user_message_with_context += f"\n\nDeep research:\n{web_search(user_message, num_results=5)}"
     elif any(word in msg_lower for word in search_triggers):
         user_message_with_context += f"\n\nSearch results:\n{web_search(user_message)}"
 
-    calendar_triggers = ['schedule', 'calendar', 'event', 'meeting', 'appointment',
-                         'tomorrow', 'next week', 'what do i have', 'today']
-    if any(word in msg_lower for word in calendar_triggers):
+    if any(word in msg_lower for word in ['schedule', 'calendar', 'meeting', 'tomorrow', 'what do i have']):
         events = get_upcoming_events(max_results=5)
         if events:
             user_message_with_context += f"\n\nUpcoming events:\n" + "\n".join([f"- {e['title']} at {e['start']}" for e in events])
@@ -1027,15 +1150,15 @@ def chat():
     calendar_results = process_calendar_commands(assistant_message)
     display_message = clean_response(assistant_message)
 
-    save_memory(f"Nathaniel said: {user_message} | Bina responded: {display_message[:300]}", memory_type='conversation')
+    save_memory(f"Nathaniel: {user_message} | Bina: {display_message[:300]}", memory_type='conversation')
 
     if any(word in msg_lower for word in ['remember', 'save', 'note', 'important', "don't forget", 'remind me']):
-        save_memory(f"IMPORTANT — Nathaniel said to remember: {user_message}", memory_type='explicit')
+        save_memory(f"IMPORTANT — Nathaniel said: {user_message}", memory_type='explicit')
 
     if any(word in msg_lower for word in ['my mom', 'my dad', 'my friend', 'my brother', 'my sister',
                                            'my girlfriend', 'i am', "i'm", 'i have', 'i work',
                                            'i live', 'i want', 'i hate', 'i love', 'my goal']):
-        save_memory(f"Personal info — Nathaniel said: {user_message}", memory_type='personal')
+        save_memory(f"Personal — Nathaniel: {user_message}", memory_type='personal')
 
     result = {'response': display_message}
     if email_results:
@@ -1078,7 +1201,7 @@ def oauth_callback():
     if error:
         return f'<h2 style="color:red">Error: {error}</h2>', 400
     if not code:
-        return '<h2 style="color:red">No code returned</h2>', 400
+        return '<h2 style="color:red">No code</h2>', 400
     token_response = requests.post('https://oauth2.googleapis.com/token', data={
         'code': code,
         'client_id': os.environ.get('GOOGLE_CLIENT_ID'),
@@ -1092,9 +1215,7 @@ def oauth_callback():
     return f"""<html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
     <h2>OAuth</h2>
     <textarea style="width:100%;height:80px;background:#111;color:#0f0;padding:8px;">{refresh_token}</textarea>
-    <p>{note}</p>
-    <pre style="background:#111;padding:10px;color:#ff0;">{json.dumps(tokens, indent=2)}</pre>
-    </body></html>"""
+    <p>{note}</p></body></html>"""
 
 
 # ── Start ─────────────────────────────────────────────────────────────────────
