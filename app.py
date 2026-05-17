@@ -12,7 +12,9 @@ from flask import Flask, request, jsonify, session, redirect
 from flask_cors import CORS
 from anthropic import Anthropic
 from duckduckgo_search import DDGS
-from pywebpush import webpush, WebPushException, Vapid
+from pywebpush import webpush, WebPushException
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.secret_key = os.environ.get('SECRET_KEY', 'bina-secret-key-2024')
@@ -460,20 +462,33 @@ def vapid_key():
 @app.route('/generate-vapid')
 def generate_vapid():
     try:
-        v = Vapid()
-        v.generate_keys()
-        pub = v.public_key
-        priv = v.private_key
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        priv_bytes = private_key.private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption()
+        )
+        pub_bytes = public_key.public_bytes(
+            serialization.Encoding.X962,
+            serialization.PublicFormat.UncompressedPoint
+        )
+
+        priv_b64 = base64.urlsafe_b64encode(priv_bytes).rstrip(b"=").decode()
+        pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b"=").decode()
+
         return f"""
         <html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
         <h2>✅ Fresh VAPID Keys</h2>
+        <p>Public key length: {len(pub_b64)} chars (needs to be 87)</p>
+        <p>Private key length: {len(priv_b64)} chars (needs to be 43)</p>
+        <br>
         <p><b>VAPID_PUBLIC_KEY:</b></p>
-        <textarea style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{pub}</textarea>
+        <textarea style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{pub_b64}</textarea>
         <br><br>
         <p><b>VAPID_PRIVATE_KEY:</b></p>
-        <textarea style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{priv}</textarea>
-        <br><br>
-        <p style="color:#ff0">⚠️ Copy both into Railway Variables then delete /generate-vapid from app.py!</p>
+        <textarea style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{priv_b64}</textarea>
         </body></html>
         """
     except Exception as e:
