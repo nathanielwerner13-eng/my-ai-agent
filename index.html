@@ -181,17 +181,18 @@
     // ── Push Notifications ─────────────────────────────────────────────────
 
     async function checkPushStatus() {
-        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-        if (sessionStorage.getItem('push_dismissed') === '1') return;
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+            addMsg('ℹ️ Push not supported on this browser.', 'agent');
+            return;
+        }
         const permission = Notification.permission;
         if (permission === 'granted') {
-            // Already granted — just register silently
             await registerPushSilent();
         } else if (permission === 'default') {
-            // Show our custom prompt bar
             document.getElementById('notif-prompt').classList.remove('hidden');
+        } else {
+            addMsg('⚠️ Notifications blocked. Go to iPhone Settings → Bina → Notifications → turn on Allow Notifications.', 'agent');
         }
-        // If 'denied' — do nothing
     }
 
     async function enablePush() {
@@ -199,7 +200,8 @@
         const permission = await Notification.requestPermission();
         if (permission === 'granted') {
             await registerPushSilent();
-            addMsg('🔔 Notifications enabled! Bina will alert you to important emails and updates.', 'agent');
+        } else {
+            addMsg('⚠️ Notification permission denied. Go to iPhone Settings → Bina → Notifications to enable.', 'agent');
         }
     }
 
@@ -214,30 +216,24 @@
             await navigator.serviceWorker.ready;
             const keyRes = await fetch('/vapid-public-key');
             const keyData = await keyRes.json();
-            const existing = await reg.pushManager.getSubscription();
-            if (existing) {
-                // Re-send existing subscription to server in case it was wiped
-                await fetch('/subscribe', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    credentials: 'include',
-                    body: JSON.stringify(existing)
+            let sub = await reg.pushManager.getSubscription();
+            if (!sub) {
+                sub = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(keyData.key)
                 });
-                return;
             }
-            const sub = await reg.pushManager.subscribe({
-                userVisibleOnly: true,
-                applicationServerKey: urlBase64ToUint8Array(keyData.key)
-            });
-            await fetch('/subscribe', {
+            const res = await fetch('/subscribe', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 credentials: 'include',
                 body: JSON.stringify(sub)
             });
-            console.log('Push registered successfully');
+            if (res.ok) {
+                addMsg('🔔 Push notifications active! Bina will alert you to important messages.', 'agent');
+            }
         } catch(e) {
-            console.log('Push registration error:', e);
+            addMsg('Push setup failed: ' + e.message, 'agent');
         }
     }
 
@@ -250,7 +246,7 @@
         return outputArray;
     }
 
-    // ── Notifications ──────────────────────────────────────────────────────
+    // ── Notifications Bell ─────────────────────────────────────────────────
 
     let allNotifications = [];
 
