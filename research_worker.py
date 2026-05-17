@@ -5,7 +5,6 @@ import datetime
 import threading
 import requests
 import uuid
-import re
 from anthropic import Anthropic
 from pinecone import Pinecone
 
@@ -97,7 +96,8 @@ def web_search(query, num_results=5):
     try:
         response = requests.post(
             'https://google.serper.dev/search',
-            headers={'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json'},
+            headers={'X-API-KEY': SERPER_API_KEY,
+                     'Content-Type': 'application/json'},
             json={'q': query, 'num': num_results},
             timeout=10
         )
@@ -107,11 +107,11 @@ def web_search(query, num_results=5):
             answer = (data['answerBox'].get('answer') or
                      data['answerBox'].get('snippet') or '')
             if answer:
-                output += f"DIRECT: {answer}\n"
+                output += f"DIRECT ANSWER: {answer}\n"
         for r in data.get('organic', [])[:num_results]:
-            output += f"• {r.get('title', '')}: {r.get('snippet', '')}\n"
-        for n in data.get('news', [])[:4]:
-            output += f"• NEWS ({n.get('date', 'recent')}): {n.get('title', '')} — {n.get('snippet', '')}\n"
+            output += f"• {r.get('title','')}: {r.get('snippet','')}\n"
+        for n in data.get('news', [])[:3]:
+            output += f"• NEWS ({n.get('date','recent')}): {n.get('title','')} — {n.get('snippet','')}\n"
         return output
     except Exception as e:
         return f"Search error: {str(e)}"
@@ -125,32 +125,24 @@ def get_news(category='general', query=None, hours=6):
     try:
         if query:
             from_time = (datetime.datetime.utcnow() -
-                        datetime.timedelta(hours=hours)).strftime('%Y-%m-%dT%H:%M:%SZ')
-            response = requests.get(
+                        datetime.timedelta(hours=hours)
+                        ).strftime('%Y-%m-%dT%H:%M:%SZ')
+            r = requests.get(
                 'https://newsapi.org/v2/everything',
-                params={
-                    'apiKey': NEWS_API_KEY,
-                    'q': query,
-                    'language': 'en',
-                    'sortBy': 'publishedAt',
-                    'pageSize': 15,
-                    'from': from_time
-                },
+                params={'apiKey': NEWS_API_KEY, 'q': query,
+                        'language': 'en', 'sortBy': 'publishedAt',
+                        'pageSize': 15, 'from': from_time},
                 timeout=10
             )
         else:
-            response = requests.get(
+            r = requests.get(
                 'https://newsapi.org/v2/top-headlines',
-                params={
-                    'apiKey': NEWS_API_KEY,
-                    'language': 'en',
-                    'pageSize': 20,
-                    'category': category
-                },
+                params={'apiKey': NEWS_API_KEY, 'language': 'en',
+                        'pageSize': 20, 'category': category},
                 timeout=10
             )
-        if response.status_code == 200:
-            return response.json().get('articles', [])
+        if r.status_code == 200:
+            return r.json().get('articles', [])
         return []
     except Exception as e:
         print(f"NewsAPI error: {str(e)}")
@@ -162,19 +154,18 @@ def format_articles(articles, max=15):
         title = a.get('title', '')
         desc = a.get('description', '') or ''
         source = a.get('source', {}).get('name', '?')
-        published = a.get('publishedAt', '')[:16]
+        pub = a.get('publishedAt', '')[:16]
         if title and '[Removed]' not in title:
             output += f"• [{source}] {title}"
             if desc:
-                output += f" — {desc[:120]}"
-            output += f" ({published})\n"
+                output += f" — {desc[:100]}"
+            output += f" ({pub})\n"
     return output
 
 
-# ── Polymarket — FULL scan, wider filter ─────────────────────────────────────
+# ── Polymarket ────────────────────────────────────────────────────────────────
 
 def get_all_polymarket_markets(limit=200):
-    """Get ALL markets — wider filter to find more opportunities."""
     try:
         response = requests.get(
             'https://gamma-api.polymarket.com/markets',
@@ -192,9 +183,8 @@ def get_all_polymarket_markets(limit=200):
             title = str(m.get('question', m.get('title', '')))
             title_lower = title.lower()
 
-            # Only skip GTA VI floor contracts
-            if any(skip in title_lower for skip in
-                   ['gta vi', 'gta6', 'grand theft auto']):
+            # Skip GTA VI floor contracts only
+            if any(s in title_lower for s in ['gta vi', 'gta6', 'grand theft auto']):
                 continue
 
             volume = m.get('volume', 0) or 0
@@ -203,15 +193,14 @@ def get_all_polymarket_markets(limit=200):
             except:
                 volume = 0
 
-            # Get odds
             yes_price = None
             no_price = None
             try:
-                outcome_prices = m.get('outcomePrices', '[]')
-                if isinstance(outcome_prices, str):
-                    prices = json.loads(outcome_prices)
-                elif isinstance(outcome_prices, list):
-                    prices = outcome_prices
+                op = m.get('outcomePrices', '[]')
+                if isinstance(op, str):
+                    prices = json.loads(op)
+                elif isinstance(op, list):
+                    prices = op
                 else:
                     prices = []
                 if len(prices) >= 2:
@@ -223,7 +212,6 @@ def get_all_polymarket_markets(limit=200):
             except:
                 pass
 
-            # Resolution date
             end_date = m.get('endDate', '')
             days_until = None
             end_str = 'Unknown'
@@ -242,7 +230,7 @@ def get_all_polymarket_markets(limit=200):
             has_floor = any(p in description.lower() for p in
                           ['50-50', '50/50', 'neither', 'resolve 0.5', '0.50'])
 
-            # WIDER filter — only skip if extremely certain (>95% or <5%)
+            # Wide filter — skip only near-certain
             if yes_price and (yes_price > 0.95 or yes_price < 0.05):
                 continue
 
@@ -260,9 +248,8 @@ def get_all_polymarket_markets(limit=200):
             })
 
         processed.sort(key=lambda x: x['volume'], reverse=True)
-        print(f"Polymarket: {len(processed)} valid markets found")
+        print(f"Polymarket: {len(processed)} markets")
         return processed
-
     except Exception as e:
         print(f"Polymarket error: {str(e)}")
         return []
@@ -300,12 +287,12 @@ def detect_odds_movement(markets, history):
         yes = m.get('yes_price')
         if not yes or title not in history:
             continue
-        old_yes = history[title].get('yes', yes)
-        diff = yes - old_yes
+        old = history[title].get('yes', yes)
+        diff = yes - old
         if abs(diff) > 0.03:
             movements.append({
                 'title': title,
-                'old_yes': old_yes,
+                'old_yes': old,
                 'new_yes': yes,
                 'diff': diff,
                 'volume': m.get('volume', 0),
@@ -316,13 +303,94 @@ def detect_odds_movement(markets, history):
     return movements
 
 
+# ── VERIFIED Sports Data ──────────────────────────────────────────────────────
+
+def get_verified_nba_status():
+    """Run multiple searches and build a verified picture of NBA status.
+    Returns a fact-checked summary only — no hallucination."""
+    print("  Verifying NBA status with multiple searches...")
+    searches = [
+        "NBA playoffs 2026 conference finals teams who is playing right now",
+        "NBA Finals 2026 teams confirmed who advanced",
+        "OKC Thunder NBA playoffs 2026 current status eliminated or alive",
+        "San Antonio Spurs NBA playoffs 2026 current status",
+        "New York Knicks NBA playoffs 2026 current status",
+        "NBA bracket 2026 conference finals matchups today"
+    ]
+    all_results = ""
+    for s in searches:
+        result = web_search(s, num_results=5)
+        all_results += f"\n{result}"
+        time.sleep(1.5)
+
+    # Ask Claude to extract ONLY verified facts
+    try:
+        extract = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=400,
+            messages=[{"role": "user", "content": f"""From these search results, extract ONLY verified NBA playoff facts.
+If something is not clearly confirmed in multiple sources, say "UNCONFIRMED".
+Do NOT infer or assume — only state what is explicitly mentioned.
+
+SEARCH RESULTS:
+{all_results[:3000]}
+
+Format:
+- Teams confirmed in NBA Finals or Conference Finals: [list or UNKNOWN]
+- Teams confirmed eliminated: [list or UNKNOWN]  
+- Current series scores if mentioned: [details or UNKNOWN]
+- OKC Thunder status: [alive/eliminated/UNKNOWN]
+- San Antonio Spurs status: [alive/eliminated/UNKNOWN]
+- New York Knicks status: [alive/eliminated/UNKNOWN]
+- Any other confirmed facts: [details]"""}]
+        )
+        return all_results, extract.content[0].text
+    except:
+        return all_results, "Could not verify NBA status"
+
+def get_verified_nhl_status():
+    """Verified NHL status."""
+    print("  Verifying NHL status...")
+    searches = [
+        "NHL playoffs 2026 conference finals teams playing now",
+        "Colorado Avalanche NHL playoffs 2026 current status series",
+        "Carolina Hurricanes NHL playoffs 2026 current status series",
+        "NHL Stanley Cup Finals 2026 teams confirmed",
+        "NHL bracket 2026 conference finals matchups"
+    ]
+    all_results = ""
+    for s in searches:
+        result = web_search(s, num_results=5)
+        all_results += f"\n{result}"
+        time.sleep(1.5)
+
+    try:
+        extract = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=300,
+            messages=[{"role": "user", "content": f"""Extract ONLY verified NHL playoff facts. If not clearly confirmed, say UNKNOWN.
+
+{all_results[:2000]}
+
+Format:
+- Teams in Conference Finals: [list or UNKNOWN]
+- Teams eliminated: [list or UNKNOWN]
+- Colorado Avalanche status: [alive/eliminated/UNKNOWN + series info]
+- Carolina Hurricanes status: [alive/eliminated/UNKNOWN + series info]
+- Vegas Golden Knights status: [alive/eliminated/UNKNOWN]"""}]
+        )
+        return all_results, extract.content[0].text
+    except:
+        return all_results, "Could not verify NHL status"
+
+
 # ── FRED ──────────────────────────────────────────────────────────────────────
 
 def get_fred_snapshot():
     if not FRED_API_KEY:
         return ""
     indicators = {
-        'FEDFUNDS': 'Fed Funds Rate',
+        'FEDFUNDS': 'Fed Rate',
         'UNRATE': 'Unemployment',
         'DGS10': '10yr Treasury',
         'DCOILWTICO': 'WTI Oil',
@@ -331,26 +399,21 @@ def get_fred_snapshot():
     output = ""
     for series_id, name in indicators.items():
         try:
-            response = requests.get(
+            r = requests.get(
                 'https://api.stlouisfed.org/fred/series/observations',
-                params={
-                    'series_id': series_id,
-                    'api_key': FRED_API_KEY,
-                    'file_type': 'json',
-                    'limit': 2,
-                    'sort_order': 'desc'
-                },
+                params={'series_id': series_id, 'api_key': FRED_API_KEY,
+                        'file_type': 'json', 'limit': 2, 'sort_order': 'desc'},
                 timeout=8
             )
-            if response.status_code == 200:
-                obs = response.json().get('observations', [])
+            if r.status_code == 200:
+                obs = r.json().get('observations', [])
                 if obs and obs[0].get('value') != '.':
-                    current = float(obs[0]['value'])
+                    curr = float(obs[0]['value'])
                     prev = float(obs[1]['value']) if (
-                        len(obs) > 1 and obs[1].get('value') != '.') else current
-                    change = current - prev
+                        len(obs) > 1 and obs[1].get('value') != '.') else curr
+                    change = curr - prev
                     arrow = '📈' if change > 0 else '📉' if change < 0 else '➡️'
-                    output += f"{arrow} {name}: {current} (Δ{change:+.2f})\n"
+                    output += f"{arrow} {name}: {curr} (Δ{change:+.2f}) {obs[0]['date']}\n"
             time.sleep(0.3)
         except:
             pass
@@ -376,156 +439,79 @@ def save_seen_news(seen):
         pass
 
 
-# ── NBA Data ──────────────────────────────────────────────────────────────────
-
-def get_nba_data():
-    output = ""
-    if RAPIDAPI_KEY:
-        try:
-            response = requests.get(
-                'https://nba-api-free-data.p.rapidapi.com/nba-live-score',
-                headers={
-                    'x-rapidapi-host': 'nba-api-free-data.p.rapidapi.com',
-                    'x-rapidapi-key': RAPIDAPI_KEY
-                },
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                games = (data.get('events') or data.get('games') or
-                        data.get('scoreboard', {}).get('games') or [])
-                if games:
-                    output += f"NBA Live ({len(games)} games):\n"
-                    for g in games[:6]:
-                        try:
-                            home = g.get('homeTeam', g.get('home', {}))
-                            away = g.get('awayTeam', g.get('away', {}))
-                            home_name = (home.get('teamName') or
-                                       home.get('teamTricode') or 'Home')
-                            away_name = (away.get('teamName') or
-                                       away.get('teamTricode') or 'Away')
-                            home_score = home.get('score', '?')
-                            away_score = away.get('score', '?')
-                            status = (g.get('status', {}).get('type', {})
-                                     .get('description') or
-                                     g.get('statusText') or 'Unknown')
-                            output += f"  {away_name} {away_score} @ {home_name} {home_score} — {status}\n"
-                        except:
-                            pass
-        except Exception as e:
-            print(f"NBA API error: {str(e)}")
-
-    # Always search for current playoff context
-    searches = [
-        "NBA Conference Finals 2026 series scores today results",
-        "OKC Thunder Spurs Knicks Cavaliers NBA playoffs bracket 2026",
-        "NBA Finals 2026 who advanced who eliminated"
-    ]
-    for s in searches:
-        output += web_search(s, num_results=4)
-        time.sleep(1)
-    return output
-
-def get_nhl_data():
-    output = ""
-    searches = [
-        "NHL Conference Finals 2026 series scores today",
-        "Colorado Avalanche Carolina Hurricanes NHL playoffs 2026 series",
-        "NHL Stanley Cup Finals 2026 who advanced"
-    ]
-    for s in searches:
-        output += web_search(s, num_results=4)
-        time.sleep(1)
-    return output
-
-
 # ── Deep Political Research ───────────────────────────────────────────────────
 
 def deep_political_research():
-    """30+ searches — comprehensive political coverage."""
+    """30 searches — real political coverage."""
     output = ""
     topics = [
-        # US Politics
-        "Trump major announcement news today",
-        "US Congress vote bill passed today",
-        "2026 midterm election polling latest",
-        "Trump approval rating latest",
-        "Republican Democrat news today",
-        # World Politics — high market impact
-        "China Taiwan military activity news today",
-        "Russia Ukraine war ceasefire peace talks today",
-        "Israel Gaza war news today",
-        "Iran nuclear deal talks news",
+        "Trump major policy announcement today",
+        "US Congress legislation vote today",
+        "2026 midterm election polling",
+        "China Taiwan military news today",
+        "Russia Ukraine war ceasefire today",
+        "Israel Iran nuclear news today",
+        "Middle East conflict breaking today",
         "NATO military news today",
-        "North Korea missile nuclear news",
-        "Saudi Arabia OPEC oil news today",
-        "India Pakistan conflict news",
-        "South China Sea military news",
-        "Strait of Hormuz shipping news",
-        # Market-moving political
-        "Polymarket prediction odds politics today",
-        "election odds movement today",
-        "geopolitical risk markets today",
-        "political crisis breaking news today",
-        "war risk escalation news today",
-        # Economic/Political
+        "North Korea missile news",
+        "Strait of Hormuz oil shipping news",
+        "OPEC oil production news today",
+        "Saudi Arabia geopolitical news",
+        "India Pakistan tensions today",
+        "South China Sea military today",
         "Federal Reserve rate decision news",
         "US inflation CPI data today",
-        "oil price spike geopolitical",
+        "oil price geopolitical risk today",
         "sanctions news today",
         "trade war tariffs news today",
-        # Sports political context
-        "FIFA World Cup 2026 team news form",
-        "NBA Finals 2026 predictions betting odds",
-        "NHL Stanley Cup 2026 series update",
-        "sports betting market movement today",
-        "World Cup favorites analysis 2026"
+        "Polymarket political odds movement today",
+        "election prediction market odds today",
+        "geopolitical risk market impact today",
+        "political crisis breaking today",
+        "war escalation news today",
+        "Trump approval rating latest poll",
+        "2028 presidential race news",
+        "Republican Democrat news today",
+        "world leaders summit meeting today",
+        "nuclear deal talks news today",
+        "coup assassination political news today"
     ]
-
     for i, topic in enumerate(topics):
         result = web_search(topic, num_results=3)
         output += f"\n{result}"
         time.sleep(1.5)
-        if i % 5 == 0:
-            print(f"  Political research: {i+1}/{len(topics)} searches done")
-
+        if (i + 1) % 10 == 0:
+            print(f"  Political: {i+1}/{len(topics)} done")
     return output
 
 
 # ── Breaking News Monitor ─────────────────────────────────────────────────────
 
 def run_breaking_news_monitor():
-    """Every 15 min — broad market-moving triggers."""
-    print(f"Breaking news check: {datetime.datetime.now().strftime('%H:%M')}")
-
+    print(f"Breaking news: {datetime.datetime.now().strftime('%H:%M')}")
     triggers = [
-        'strait of hormuz', 'taiwan strait', 'china military', 'invasion begins',
-        'nuclear', 'ceasefire announced', 'war declared', 'troops deployed',
-        'sanctions imposed', 'nato invoked', 'missile launch', 'attacked',
+        'strait of hormuz', 'taiwan strait', 'china military', 'invasion',
+        'nuclear', 'ceasefire', 'war declared', 'troops deployed',
+        'sanctions', 'nato invoked', 'missile launch', 'attacked',
         'federal reserve emergency', 'rate cut surprise', 'rate hike surprise',
         'market crash', 'bank collapse', 'debt default', 'oil embargo',
-        'opec emergency', 'trump impeach', 'assassination', 'coup',
-        'nba finals game', 'stanley cup game', 'series clinched',
-        'eliminated playoffs', 'advances to finals', 'overtime winner',
-        'world cup qualifier', 'upset win', 'injury star player'
+        'opec emergency', 'trump impeach', 'assassination attempt', 'coup',
+        'series clinched', 'advances to finals', 'eliminated playoffs',
+        'nba finals', 'stanley cup', 'world cup result'
     ]
 
     seen_news = load_seen_news()
     alerts = []
 
-    categories = ['general', 'politics', 'business', 'sports']
     all_articles = []
-    for cat in categories:
-        articles = get_news(category=cat)
-        all_articles.extend(articles)
+    for cat in ['general', 'politics', 'business', 'sports']:
+        all_articles.extend(get_news(category=cat))
         time.sleep(0.5)
 
-    # Extra high-value searches
     for query in ['breaking geopolitical crisis today',
-                  'NBA game result tonight score',
-                  'NHL playoff game result tonight']:
-        articles = get_news(query=query, hours=3)
-        all_articles.extend(articles)
+                  'NBA playoffs result tonight',
+                  'NHL playoffs result tonight']:
+        all_articles.extend(get_news(query=query, hours=3))
         time.sleep(0.5)
 
     for article in all_articles:
@@ -556,15 +542,12 @@ def run_breaking_news_monitor():
                 body += f"{alert['description'][:150]}\n"
             body += f"Triggers: {', '.join(alert['keywords'][:2])}\n\n"
 
-        # Quick market impact research
         market_search = web_search(
             f"Polymarket odds {alerts[0]['title'][:50]}", num_results=3)
         body += f"**Market impact:**\n{market_search[:300]}"
 
         push_to_main_app(
-            f"🚨 Breaking: {alerts[0]['title'][:55]}",
-            body
-        )
+            f"🚨 Breaking: {alerts[0]['title'][:55]}", body)
         save_memory(f"Breaking: {alerts[0]['title']}", memory_type='breaking')
     else:
         print("No breaking alerts")
@@ -573,7 +556,6 @@ def run_breaking_news_monitor():
 # ── Sports Monitor ────────────────────────────────────────────────────────────
 
 def run_sports_monitor():
-    """Deep sports research every 30 min during game hours."""
     print(f"Sports monitor: {datetime.datetime.now().strftime('%H:%M')}")
 
     all_markets = get_all_polymarket_markets(limit=200)
@@ -588,62 +570,46 @@ def run_sports_monitor():
         print("No sports markets")
         return
 
-    nba_data = get_nba_data()
-    nhl_data = get_nhl_data()
+    # Get VERIFIED status before making any calls
+    nba_raw, nba_verified = get_verified_nba_status()
+    nhl_raw, nhl_verified = get_verified_nhl_status()
 
-    # Arb calculations
+    # Arb math
     wc = [m for m in sports_markets if
           ('world cup' in m['title'].lower() or 'fifa' in m['title'].lower())
           and m.get('yes_price', 0) > 0.04]
-    nba = [m for m in sports_markets if
-           'nba finals' in m['title'].lower() and m.get('yes_price')]
-    nhl_cup = [m for m in sports_markets if
-               'stanley cup' in m['title'].lower() and m.get('yes_price')]
+    nba_f = [m for m in sports_markets if
+             'nba finals' in m['title'].lower() and m.get('yes_price')]
+    nhl_c = [m for m in sports_markets if
+             'stanley cup' in m['title'].lower() and m.get('yes_price')]
 
     wc_total = sum(m.get('yes_price', 0) for m in wc)
-    nba_total = sum(m.get('yes_price', 0) for m in nba)
-    nhl_total = sum(m.get('yes_price', 0) for m in nhl_cup)
+    nba_total = sum(m.get('yes_price', 0) for m in nba_f)
+    nhl_total = sum(m.get('yes_price', 0) for m in nhl_c)
 
-    arb_section = ""
-    if wc_total < 0.94:
-        arb_section += f"⚡ **World Cup gap: {1-wc_total:.1%}**\n"
-        for m in sorted(wc, key=lambda x: x.get('yes_price', 0), reverse=True)[:8]:
-            arb_section += f"  {m['title'].replace('Will ', '').replace(' win the 2026 FIFA World Cup?', '')}: {m.get('yes_price', 0):.1%}\n"
-        arb_section += f"  Total: {wc_total:.1%} | Gap: {1-wc_total:.1%}\n\n"
+    prompt = f"""You are Bina's sports analyst. You have VERIFIED facts about current playoff status.
 
-    if nba_total < 0.94:
-        arb_section += f"⚡ **NBA Finals gap: {1-nba_total:.1%}**\n"
-        for m in nba:
-            arb_section += f"  {m['title'].replace('Will the ', '').replace(' win the 2026 NBA Finals?', '')}: {m.get('yes_price', 0):.1%}\n"
-        arb_section += f"  Total: {nba_total:.1%} | Gap: {1-nba_total:.1%}\n\n"
+VERIFIED NBA STATUS (extracted from multiple sources):
+{nba_verified}
 
-    if nhl_total < 0.94:
-        arb_section += f"⚡ **NHL Stanley Cup gap: {1-nhl_total:.1%}**\n"
-        for m in nhl_cup:
-            arb_section += f"  {m['title'].replace('Will the ', '').replace(' win the 2026 NHL Stanley Cup?', '')}: {m.get('yes_price', 0):.1%}\n"
-        arb_section += f"  Total: {nhl_total:.1%} | Gap: {1-nhl_total:.1%}\n\n"
+VERIFIED NHL STATUS:
+{nhl_verified}
 
-    prompt = f"""You are Bina's sports analyst. Be extremely specific and brief.
+ACTIVE MARKETS:
+{chr(10).join([f"• {m['title']}: YES {m.get('yes_price',0):.1%} | ${m.get('volume',0):,.0f} | {m.get('end_date','?')} ({m.get('days_until','?')}d)" for m in sports_markets[:15]])}
 
-ACTUAL NBA DATA (search + API):
-{nba_data[:1200]}
+NBA Finals market totals: {nba_total:.1%} (gap: {1-nba_total:.1%})
+NHL Cup market totals: {nhl_total:.1%} (gap: {1-nhl_total:.1%})
+World Cup top teams total: {wc_total:.1%} (gap: {1-wc_total:.1%})
 
-ACTUAL NHL DATA:
-{nhl_data[:800]}
-
-ACTIVE SPORTS MARKETS:
-{chr(10).join([f"• {m['title']}: YES {m.get('yes_price', 0):.1%} | ${m.get('volume',0):,.0f} | {m.get('end_date','?')} ({m.get('days_until','?')}d)" for m in sports_markets[:15]])}
-
-ARB ANALYSIS:
-{arb_section}
-
-Rules:
-- Cross-reference ACTUAL game results above with market odds
-- If a team just won/lost, check if the market has adjusted
-- Complete arb math — if gap exists name the exact trade
-- If NO edge exists, say "No sports edge right now" in one line
-- MAX 200 words
-- Format each pick: **Market** | Odds | Position | Why (one sentence)"""
+CRITICAL RULES:
+- ONLY make a pick if the verified status above CONFIRMS the team is still alive
+- If status is UNKNOWN, say "Need game data — no sports picks until confirmed"
+- Do NOT hallucinate series scores or bracket positions
+- World Cup "gap" is NOT an arb — you cannot profit by buying all teams since only one wins
+- NBA/NHL gap IS meaningful if a team is missing from the market (truly unrepresented)
+- Keep under 200 words
+- Format: **Market** | Odds | BUY YES/NO | Why (verified fact only)"""
 
     try:
         response = client.messages.create(
@@ -653,13 +619,12 @@ Rules:
         )
         result = response.content[0].text
 
-        if 'no sports edge' not in result.lower():
-            body = f"{result}\n\n{arb_section}"
+        if 'need game data' not in result.lower():
             push_to_main_app(
-                f"🏀 Sports Edge — {datetime.datetime.now().strftime('%H:%M')}",
-                body
+                f"🏀 Sports — {datetime.datetime.now().strftime('%H:%M')}",
+                result
             )
-        print(f"Sports done: {result[:80]}")
+        print(f"Sports done")
     except Exception as e:
         print(f"Sports error: {str(e)}")
 
@@ -675,8 +640,8 @@ def run_deep_research():
 
     data = {}
 
-    # Phase 1 — Markets (2 min)
-    print("\n[1/7] Polymarket full scan...")
+    # Phase 1 — Markets
+    print("\n[1/7] Polymarket scan...")
     all_markets = get_all_polymarket_markets(limit=200)
     history = load_market_history()
     movements = detect_odds_movement(all_markets, history)
@@ -686,56 +651,69 @@ def run_deep_research():
     print(f"Markets: {len(all_markets)} | Movements: {len(movements)}")
     time.sleep(5)
 
-    # Phase 2 — Deep political (8-10 min)
-    print("\n[2/7] Deep political research (30 searches)...")
+    # Phase 2 — Deep political
+    print("\n[2/7] Deep political (30 searches)...")
     data['political'] = deep_political_research()
     print("Political done")
     time.sleep(5)
 
-    # Phase 3 — News (2 min)
+    # Phase 3 — News
     print("\n[3/7] News collection...")
     world_news = get_news(category='world') or []
-    political_news = get_news(category='politics') or []
+    pol_news = get_news(category='politics') or []
     sports_news = get_news(category='sports') or []
-    business_news = get_news(category='business') or []
-    all_news = world_news + political_news + sports_news + business_news
+    biz_news = get_news(category='business') or []
+    all_news = world_news + pol_news + sports_news + biz_news
     data['news'] = format_articles(all_news, max=25)
     print(f"News: {len(all_news)} articles")
     time.sleep(5)
 
-    # Phase 4 — Sports (4 min)
-    print("\n[4/7] Sports research...")
-    data['nba'] = get_nba_data()
+    # Phase 4 — VERIFIED sports
+    print("\n[4/7] Verified sports research...")
+    nba_raw, nba_verified = get_verified_nba_status()
     time.sleep(3)
-    data['nhl'] = get_nhl_data()
-    time.sleep(3)
-    print("Sports done")
+    nhl_raw, nhl_verified = get_verified_nhl_status()
+    data['nba_verified'] = nba_verified
+    data['nhl_verified'] = nhl_verified
+    data['nba_raw'] = nba_raw
+    data['nhl_raw'] = nhl_raw
+    print("Sports verified")
     time.sleep(5)
 
-    # Phase 5 — FRED (1 min)
-    print("\n[5/7] Economic data...")
+    # Phase 5 — FRED
+    print("\n[5/7] FRED data...")
     data['fred'] = get_fred_snapshot()
     print("FRED done")
     time.sleep(5)
 
-    # Phase 6 — Odds movements alert (1 min)
-    print("\n[6/7] Checking odds movements...")
+    # Phase 6 — Odds movements
+    print("\n[6/7] Odds movements...")
     movements_text = ""
     if movements:
         movements_text = "**Odds moved since last check:**\n"
         for mv in movements[:5]:
-            d = mv['diff']
-            arrow = "⬆️" if d > 0 else "⬇️"
-            movements_text += f"{arrow} **{mv['title']}**: {mv['old_yes']:.1%} → {mv['new_yes']:.1%} ({d:+.1%})\n"
-            movements_text += f"  Vol: ${mv['volume']:,.0f} | Resolves: {mv['end_date']}\n"
+            arrow = "⬆️" if mv['diff'] > 0 else "⬇️"
+            movements_text += f"{arrow} **{mv['title']}**: {mv['old_yes']:.1%} → {mv['new_yes']:.1%} ({mv['diff']:+.1%}) | {mv['end_date']}\n"
     print(f"Movements: {len(movements)}")
     time.sleep(5)
 
-    # Phase 7 — Synthesize (2 min)
+    # Phase 7 — Single synthesis call
     elapsed = time.time() - start_time
-    print(f"\n[7/7] Synthesizing... ({elapsed:.0f}s collected)")
+    print(f"\n[7/7] Single synthesis call ({elapsed:.0f}s collected)...")
 
-    # Arb calculations
+    def fmt(markets, n=25):
+        out = ""
+        for m in markets[:n]:
+            yes = m.get('yes_price')
+            vol = m.get('volume', 0)
+            end = m.get('end_date', '?')
+            days = m.get('days_until', '?')
+            floor = " [FLOOR-AVOID]" if m.get('has_floor') else ""
+            if yes:
+                out += f"• {m['title']}: YES {yes:.1%} | ${vol:,.0f} | {end} ({days}d){floor}\n"
+        return out
+
+    # Sports arb
     wc = [m for m in all_markets if
           ('world cup' in m['title'].lower() or 'fifa' in m['title'].lower())
           and m.get('yes_price', 0) > 0.04]
@@ -748,119 +726,105 @@ def run_deep_research():
     nba_total = sum(m.get('yes_price', 0) for m in nba_f)
     nhl_total = sum(m.get('yes_price', 0) for m in nhl_c)
 
-    def fmt(markets, n=20):
-        out = ""
-        for m in markets[:n]:
-            yes = m.get('yes_price')
-            vol = m.get('volume', 0)
-            end = m.get('end_date', '?')
-            days = m.get('days_until', '?')
-            floor = " [FLOOR]" if m.get('has_floor') else ""
-            if yes:
-                out += f"• {m['title']}: YES {yes:.1%} | ${vol:,.0f} | {end} ({days}d){floor}\n"
-        return out
+    synthesis_prompt = f"""You are Bina giving Nathaniel his intelligence report. SHORT and ACTIONABLE.
 
-    synthesis_prompt = f"""You are Bina. Nathaniel wants SHORT, ACTIONABLE picks — not analysis essays.
+Research time: {elapsed:.0f}s | Markets: {len(all_markets)} | News articles: {len(all_news)}
 
-Research: {elapsed:.0f}s | {len(all_markets)} markets | {len(all_news)} news articles
+═══ CRITICAL RULES ═══
+1. MAX 5 picks total across ALL categories
+2. Each pick = exactly one line: **Market** | YES X% | Resolves date (Xd) | BUY YES or BUY NO | H/M/L | One sentence WHY using SPECIFIC data
+3. For sports picks: you MUST reference the VERIFIED STATUS below — if status is UNKNOWN, do NOT make a sports pick
+4. World Cup "gap" is NOT an arb opportunity — skip it. Only flag NBA/NHL gap if a confirmed finalist team has NO market
+5. Skip floor contracts, skip markets resolving >300 days out
+6. If odds moved significantly, always flag that first — someone knows something
+7. ONE synthesis only — do not contradict yourself
+8. Under 250 words total
 
-RULES — CRITICAL:
-1. Give MAX 5 picks total
-2. Each pick = one line: **Market** | YES X% | Resolves date | BUY YES/NO | Confidence H/M/L | One sentence why
-3. SKIP any market where you cannot explain WHY the price is wrong with SPECIFIC data
-4. SKIP floor contracts, markets >95% or <5%, markets resolving in >200 days unless exceptional
-5. For sports: you MUST reference actual game data below — no assumptions
-6. If truly no edge exists in a category, say "No [category] edge" — don't invent picks
-7. Do NOT repeat the same market twice
-8. Total response under 300 words
+═══ VERIFIED SPORTS STATUS ═══
 
-ALL MARKETS ({len(all_markets)} total):
+NBA VERIFIED FACTS:
+{data.get('nba_verified', 'UNKNOWN — do not make NBA picks')}
+
+NHL VERIFIED FACTS:
+{data.get('nhl_verified', 'UNKNOWN — do not make NHL picks')}
+
+═══ ALL MARKETS ({len(all_markets)} total) ═══
 {fmt(all_markets, 25)}
 
-ODDS MOVEMENTS:
-{movements_text if movements_text else "No significant movements"}
+═══ ODDS MOVEMENTS ═══
+{movements_text if movements_text else "No significant movements since last check"}
 
-WORLD CUP ARB: {len(wc)} teams total YES {wc_total:.1%} gap {1-wc_total:.1%}
-{chr(10).join([f"• {m['title'].replace('Will ','').replace(' win the 2026 FIFA World Cup?','')}: {m.get('yes_price',0):.1%}" for m in sorted(wc, key=lambda x: x.get('yes_price',0), reverse=True)[:8]])}
-
-NBA FINALS ARB: {len(nba_f)} teams total YES {nba_total:.1%} gap {1-nba_total:.1%}
+═══ NBA FINALS MARKET ({len(nba_f)} teams, total {nba_total:.1%}, gap {1-nba_total:.1%}) ═══
 {chr(10).join([f"• {m['title'].replace('Will the ','').replace(' win the 2026 NBA Finals?','')}: {m.get('yes_price',0):.1%}" for m in nba_f])}
 
-NHL ARB: {len(nhl_c)} teams total YES {nhl_total:.1%} gap {1-nhl_total:.1%}
+═══ NHL CUP MARKET ({len(nhl_c)} teams, total {nhl_total:.1%}, gap {1-nhl_total:.1%}) ═══
 {chr(10).join([f"• {m['title'].replace('Will the ','').replace(' win the 2026 NHL Stanley Cup?','')}: {m.get('yes_price',0):.1%}" for m in nhl_c])}
 
-NBA LIVE DATA:
-{data.get('nba','')[:1000]}
+═══ POLITICAL RESEARCH (30 searches) ═══
+{data.get('political', '')[:2500]}
 
-NHL DATA:
-{data.get('nhl','')[:600]}
+═══ NEWS ({len(all_news)} articles) ═══
+{data.get('news', '')[:1200]}
 
-POLITICAL RESEARCH (30 searches):
-{data.get('political','')[:2500]}
+═══ FRED ECONOMIC DATA ═══
+{data.get('fred', '')}
 
-NEWS ({len(all_news)} articles):
-{data.get('news','')[:1200]}
-
-FRED:
-{data.get('fred','')}
-
-FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+RESPONSE FORMAT — EXACTLY THIS:
 
 ## Picks
 
-**[Market name]** | YES X% | Resolves [date] ([X]d) | [BUY YES / BUY NO] | [H/M/L] | [Why in one sentence using specific data]
+[If odds moved: ⚡ **ODDS ALERT**: market name moved X% — what it means]
 
-## Odds Movements
-[If any market moved >3%, flag it here with one line explanation of what it means]
+**[Market]** | YES X% | Resolves [date] ([X]d) | BUY YES/NO | H/M/L | [Why with specific data]
 
-## Watch
-[2-3 specific events in next 6 hours that could create opportunities, one line each]"""
+[Repeat for each pick, max 5]
+
+## Watch Next 6 Hours
+
+- [Specific event] → affects [specific market]
+- [Specific event] → affects [specific market]"""
 
     try:
         response = client.messages.create(
             model="claude-sonnet-4-5",
-            max_tokens=800,
+            max_tokens=700,
             messages=[{"role": "user", "content": synthesis_prompt}]
         )
         synthesis = response.content[0].text
         total_time = time.time() - start_time
-        print(f"\n✅ Complete in {total_time:.0f}s")
+        print(f"\n✅ Done in {total_time:.0f}s")
 
         save_memory(f"Research: {synthesis[:400]}", memory_type='research')
 
-        # Push main report — SHORT
+        # ONE push for the main report
         push_to_main_app(
             f"🧠 Picks — {datetime.datetime.now().strftime('%H:%M')} ({total_time:.0f}s)",
             synthesis
         )
 
-        # Push odds movements separately if significant
+        # Separate odds movements if significant
         if movements_text:
             push_to_main_app(
                 f"⚡ Odds Moved — {datetime.datetime.now().strftime('%H:%M')}",
                 movements_text
             )
 
-        # Push arb if actionable gap >8%
+        # NHL/NBA arb only if gap is real and >8%
         arb_body = ""
-        if 1 - wc_total > 0.08 and len(wc) >= 6:
-            arb_body += f"**World Cup: {1-wc_total:.1%} gap**\n"
-            for m in sorted(wc, key=lambda x: x.get('yes_price', 0), reverse=True):
-                arb_body += f"• {m['title'].replace('Will ','').replace(' win the 2026 FIFA World Cup?','')}: {m.get('yes_price',0):.1%}\n"
-            arb_body += f"Total top teams: {wc_total:.1%}\n\n"
-
         if 1 - nba_total > 0.08 and len(nba_f) >= 2:
-            arb_body += f"**NBA Finals: {1-nba_total:.1%} gap**\n"
+            arb_body += f"**NBA Finals gap: {1-nba_total:.1%}**\n"
+            arb_body += "This means a team that advanced has no market — that team is free money YES\n"
             for m in nba_f:
                 arb_body += f"• {m['title'].replace('Will the ','').replace(' win the 2026 NBA Finals?','')}: {m.get('yes_price',0):.1%}\n"
 
         if 1 - nhl_total > 0.08 and len(nhl_c) >= 2:
-            arb_body += f"**NHL Cup: {1-nhl_total:.1%} gap**\n"
+            arb_body += f"\n**NHL Cup gap: {1-nhl_total:.1%}**\n"
+            arb_body += "Missing team in market — check who advanced\n"
             for m in nhl_c:
                 arb_body += f"• {m['title'].replace('Will the ','').replace(' win the 2026 NHL Stanley Cup?','')}: {m.get('yes_price',0):.1%}\n"
 
         if arb_body:
-            push_to_main_app("⚡ Arb Gaps", arb_body)
+            push_to_main_app("⚡ Real Arb Gap Detected", arb_body)
 
         return synthesis
 
@@ -875,7 +839,6 @@ def main():
     print("=" * 50)
     print("BINA RESEARCH WORKER ONLINE")
     print(f"Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print("Schedule:")
     print("  Breaking news: every 15 min")
     print("  Sports monitor: every 30 min (4pm-1am LA)")
     print("  Deep research: every 3 hours")
