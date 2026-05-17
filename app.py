@@ -463,36 +463,40 @@ def vapid_key():
 def generate_vapid():
     try:
         private_key = ec.generate_private_key(ec.SECP256R1())
-        public_key = private_key.public_key()
 
-        priv_bytes = private_key.private_bytes(
-            serialization.Encoding.Raw,
-            serialization.PrivateFormat.Raw,
-            serialization.NoEncryption()
-        )
-        pub_bytes = public_key.public_bytes(
+        # Get uncompressed public key (04 + x + y = 65 bytes)
+        pub_bytes = private_key.public_key().public_bytes(
             serialization.Encoding.X962,
             serialization.PublicFormat.UncompressedPoint
         )
 
-        priv_b64 = base64.urlsafe_b64encode(priv_bytes).rstrip(b"=").decode()
+        # Get private key as DER and extract the raw 32-byte scalar
+        priv_der = private_key.private_bytes(
+            serialization.Encoding.DER,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption()
+        )
+        # The raw private key scalar is the last 32 bytes of the DER
+        priv_raw = priv_der[-32:]
+
         pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b"=").decode()
+        priv_b64 = base64.urlsafe_b64encode(priv_raw).rstrip(b"=").decode()
 
         return f"""
         <html><body style="font-family:monospace;padding:40px;background:#000;color:#0f0;">
         <h2>✅ Fresh VAPID Keys</h2>
-        <p>Public key length: {len(pub_b64)} chars (needs to be 87)</p>
-        <p>Private key length: {len(priv_b64)} chars (needs to be 43)</p>
+        <p>Public key: {len(pub_b64)} chars | Private key: {len(priv_b64)} chars</p>
         <br>
-        <p><b>VAPID_PUBLIC_KEY:</b></p>
-        <textarea style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{pub_b64}</textarea>
+        <p><b>VAPID_PUBLIC_KEY (copy this into Railway):</b></p>
+        <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{pub_b64}</textarea>
         <br><br>
-        <p><b>VAPID_PRIVATE_KEY:</b></p>
-        <textarea style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{priv_b64}</textarea>
+        <p><b>VAPID_PRIVATE_KEY (copy this into Railway):</b></p>
+        <textarea onclick="this.select()" style="width:100%;height:60px;background:#111;color:#0f0;font-size:12px;padding:8px;">{priv_b64}</textarea>
         </body></html>
         """
     except Exception as e:
-        return f'<h2 style="color:red;font-family:monospace;padding:40px">Error: {str(e)}</h2>'
+        import traceback
+        return f'<pre style="color:red;padding:40px">{traceback.format_exc()}</pre>'
 
 @app.route('/notifications', methods=['GET'])
 def get_notifications():
