@@ -368,7 +368,7 @@ def get_youtube_clips(channel_handle, channel_id, max_clips=5):
             print(f"YouTube: missing API key")
             return []
         url = f'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={channel_id}&order=viewCount&type=video&maxResults={max_clips}&videoDuration=short&key={api_key}'
-        yt_req = urllib.request.Request(url)
+        yt_req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
         yt_res = json.loads(urllib.request.urlopen(yt_req).read())
         clips = []
         for item in yt_res.get('items', []):
