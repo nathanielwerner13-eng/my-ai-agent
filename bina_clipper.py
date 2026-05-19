@@ -373,7 +373,7 @@ def run_clip_farm_cycle():
 
     print(f"Total new clips: {len(all_clips)}")
     if not all_clips:
-        push_to_bina("Clip Scan Complete", f"Scanned all streamers at {now_str} - no new clips. Checking again in 30 min.")
+        print(f"Clip scan complete at {now_str} - no new clips")
         return
 
     print("Scoring with AI...")
