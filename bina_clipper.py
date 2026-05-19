@@ -210,42 +210,6 @@ def get_kick_clips(streamer, limit=10):
         print(f"Kick error {streamer}: {str(e)}")
     return clips
 
-def get_twitch_clips(streamer, limit=10):
-    """Use Twitch API v5 helix clips endpoint via search fallback"""
-    clips = []
-    try:
-        # Search for recent viral Twitch clips
-        results = web_search(f"{streamer} twitch clip viral funny 2026 site:clips.twitch.tv OR site:twitch.tv", num_results=8)
-        import re
-        # Match clips.twitch.tv/ClipID or twitch.tv/streamer/clip/ClipID
-        patterns = [
-            r'clips\.twitch\.tv/([a-zA-Z0-9_-]+)',
-            r'twitch\.tv/\w+/clip/([a-zA-Z0-9_-]+)',
-        ]
-        clip_ids = []
-        for pattern in patterns:
-            clip_ids.extend(re.findall(pattern, results))
-        clip_ids = list(set(clip_ids))[:limit]
-        for clip_id in clip_ids:
-            clips.append({
-                'id': clip_id,
-                'title': f'{streamer} Twitch clip - {clip_id[:12]}',
-                'url': f'https://clips.twitch.tv/{clip_id}',
-                'views': 500,
-                'duration': 30,
-                'streamer': streamer,
-                'platform': 'twitch',
-                'thumbnail': f'https://clips-media-assets2.twitch.tv/{clip_id}-preview-480x272.jpg',
-                'likes': 0
-            })
-        if clips:
-            print(f"Twitch {streamer}: {len(clips)} clips via search")
-        else:
-            print(f"Twitch {streamer}: 0 clips found")
-    except Exception as e:
-        print(f"Twitch error {streamer}: {str(e)}")
-    return clips
-
 def get_kick_clips(streamer, limit=10):
     clips = []
     # Try multiple Kick API formats
