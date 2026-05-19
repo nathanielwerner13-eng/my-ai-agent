@@ -1,4 +1,4 @@
-import os
+ import os
 import json
 import re
 import base64
@@ -17,15 +17,15 @@ from pywebpush import webpush, WebPushException
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from pinecone import Pinecone
-
+ 
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.secret_key = os.environ.get('SECRET_KEY', 'bina-secret-key-2024')
 CORS(app)
-
+ 
 client = Anthropic()
 pc = Pinecone(api_key=os.environ.get('PINECONE_API_KEY', ''))
 PINECONE_INDEX = os.environ.get('PINECONE_INDEX', 'bina-memory')
-
+ 
 NOTIFICATIONS_FILE = 'notifications.json'
 SEEN_EMAILS_FILE = 'seen_emails.json'
 SUBSCRIPTIONS_FILE = 'subscriptions.json'
@@ -41,9 +41,9 @@ OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 ALPHA_VANTAGE_KEY = os.environ.get('ALPHA_VANTAGE_KEY', '')
 FRED_API_KEY = os.environ.get('FRED_API_KEY', '')
 NEWS_API_KEY = os.environ.get('NEWS_API_KEY', '')
-
+ 
 SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and personal chief of staff for Nathaniel Werner.
-
+ 
 ABOUT NATHANIEL:
 - 18 years old, college student in Beverly Hills
 - Entrepreneur focused on building autonomous income systems
@@ -54,30 +54,30 @@ ABOUT NATHANIEL:
 - Building toward financial freedom and passive income
 - Direct, ambitious, moves fast, hates wasted time
 - Jewish background (uses Hebrew greetings occasionally)
-
+ 
 YOUR ROLE:
 You are Nathaniel's personal chief of staff, business partner, and autonomous agent. You think ahead, spot opportunities, and help him execute fast.
-
+ 
 YOUR CAPABILITIES:
 - Send emails: SEND_EMAIL|to@email.com|Subject|Body END_EMAIL
 - Create calendar events: CREATE_EVENT|Title|2026-05-17T10:00:00|2026-05-17T11:00:00|Description END_EVENT
 - Deep web search, persistent memory, live crypto/commodities/economic data
 - Real-time energy/stock intelligence via dedicated research worker (reports at 7am, 1pm, 8pm LA)
-
+ 
 CRITICAL MEMORY INSTRUCTIONS:
 Reference memories naturally. Never ignore relevant memories.
-
+ 
 PERSONALITY:
 - Sharp, direct, no fluff
 - Write like a smart friend texting — not a formal report
 - Be concise unless depth is needed
 - Only recommend positions when you have verified real data and understand the situation
-
+ 
 The current date and time in Los Angeles will be injected into every message."""
-
-
+ 
+ 
 # ── Memory ────────────────────────────────────────────────────────────────────
-
+ 
 def get_embedding(text):
     try:
         response = requests.post(
@@ -91,7 +91,7 @@ def get_embedding(text):
     except Exception as e:
         print(f"Embedding error: {str(e)}")
         return None
-
+ 
 def save_memory(text, memory_type='conversation', metadata=None):
     try:
         embedding = get_embedding(text)
@@ -112,7 +112,7 @@ def save_memory(text, memory_type='conversation', metadata=None):
     except Exception as e:
         print(f"Save memory error: {str(e)}")
         return False
-
+ 
 def search_memories(query, top_k=8, threshold=0.5):
     try:
         embedding = get_embedding(query)
@@ -133,7 +133,7 @@ def search_memories(query, top_k=8, threshold=0.5):
     except Exception as e:
         print(f"Search memory error: {str(e)}")
         return []
-
+ 
 def get_all_context_memories(user_message):
     msg_memories = search_memories(user_message, top_k=8, threshold=0.5)
     personal_memories = search_memories("Nathaniel family mother father friends personal life", top_k=5, threshold=0.4)
@@ -146,7 +146,7 @@ def get_all_context_memories(user_message):
             all_memories.append(m)
     all_memories.sort(key=lambda x: x['score'], reverse=True)
     return all_memories[:12]
-
+ 
 def format_memories(memories):
     if not memories:
         return ""
@@ -154,20 +154,20 @@ def format_memories(memories):
     for m in memories:
         output += f"• [{m['date']}] {m['text']}\n"
     return output
-
-
+ 
+ 
 # ── Push ──────────────────────────────────────────────────────────────────────
-
+ 
 def load_subscriptions():
     if os.path.exists(SUBSCRIPTIONS_FILE):
         with open(SUBSCRIPTIONS_FILE, 'r') as f:
             return json.load(f)
     return []
-
+ 
 def save_subscriptions(subs):
     with open(SUBSCRIPTIONS_FILE, 'w') as f:
         json.dump(subs, f)
-
+ 
 def send_push(title, body, url=None, notif_type='feed'):
     if url is None:
         url = BINA_URL
@@ -188,42 +188,42 @@ def send_push(title, body, url=None, notif_type='feed'):
             if '400' not in str(e) and '410' not in str(e):
                 good_subs.append(sub)
     save_subscriptions(good_subs)
-
-
+ 
+ 
 # ── Notifications ─────────────────────────────────────────────────────────────
-
+ 
 def load_notifications():
     if os.path.exists(NOTIFICATIONS_FILE):
         with open(NOTIFICATIONS_FILE, 'r') as f:
             return json.load(f)
     return []
-
+ 
 def save_notifications(notifications):
     with open(NOTIFICATIONS_FILE, 'w') as f:
         json.dump(notifications, f)
-
+ 
 def add_notification(notif):
     notifications = load_notifications()
     notifications.insert(0, notif)
     notifications = notifications[:50]
     save_notifications(notifications)
-
-
+ 
+ 
 # ── Seen Emails ───────────────────────────────────────────────────────────────
-
+ 
 def load_seen_emails():
     if os.path.exists(SEEN_EMAILS_FILE):
         with open(SEEN_EMAILS_FILE, 'r') as f:
             return set(json.load(f))
     return set()
-
+ 
 def save_seen_emails(seen):
     with open(SEEN_EMAILS_FILE, 'w') as f:
         json.dump(list(seen), f)
-
-
+ 
+ 
 # ── Junk Filter ───────────────────────────────────────────────────────────────
-
+ 
 def is_important_email(email):
     junk_keywords = [
         'noreply', 'no-reply', 'donotreply', 'newsletter', 'notifications@',
@@ -241,10 +241,10 @@ def is_important_email(email):
         if word in sender or word in subject:
             return False
     return True
-
-
+ 
+ 
 # ── Web Search ────────────────────────────────────────────────────────────────
-
+ 
 def web_search(query, num_results=5):
     if SERPER_API_KEY:
         try:
@@ -272,10 +272,10 @@ def web_search(query, num_results=5):
             return "\n".join([f"• {r['title']}: {r['body']}" for r in results])
     except Exception as e:
         return f"Search error: {str(e)}"
-
-
+ 
+ 
 # ── Crypto ────────────────────────────────────────────────────────────────────
-
+ 
 def get_crypto_data():
     try:
         response = requests.get(
@@ -293,7 +293,7 @@ def get_crypto_data():
         return {}
     except:
         return {}
-
+ 
 def get_fear_greed_index():
     try:
         response = requests.get('https://api.alternative.me/fng/', timeout=10)
@@ -302,7 +302,7 @@ def get_fear_greed_index():
         return {}
     except:
         return {}
-
+ 
 def format_crypto_report(crypto_data, fear_greed):
     if not crypto_data:
         return "Crypto data unavailable."
@@ -324,10 +324,10 @@ def format_crypto_report(crypto_data, fear_greed):
             arrow = '📈' if change > 0 else '📉'
             output += f"{arrow} **{name}**: ${price:,.2f} | {change:+.2f}% 24h\n"
     return output
-
-
+ 
+ 
 # ── Commodities ───────────────────────────────────────────────────────────────
-
+ 
 def get_real_commodity_prices():
     output = "**Commodities**\n"
     if ALPHA_VANTAGE_KEY:
@@ -360,10 +360,10 @@ def get_real_commodity_prices():
     else:
         output += web_search("gold price oil price today USD", num_results=2)[:200]
     return output
-
-
+ 
+ 
 # ── FRED ──────────────────────────────────────────────────────────────────────
-
+ 
 def get_fred_data():
     if not FRED_API_KEY:
         return "FRED key not configured."
@@ -391,10 +391,10 @@ def get_fred_data():
         except:
             pass
     return output
-
-
+ 
+ 
 # ── Google Auth ───────────────────────────────────────────────────────────────
-
+ 
 def get_access_token():
     response = requests.post('https://oauth2.googleapis.com/token', data={
         'refresh_token': os.environ.get('GOOGLE_REFRESH_TOKEN'),
@@ -406,10 +406,10 @@ def get_access_token():
     if 'error' in data:
         raise Exception(f"Token refresh failed: {data}")
     return data['access_token']
-
-
+ 
+ 
 # ── Gmail ─────────────────────────────────────────────────────────────────────
-
+ 
 def send_email(to, subject, body):
     try:
         access_token = get_access_token()
@@ -428,7 +428,7 @@ def send_email(to, subject, body):
         return False, str(response.json())
     except Exception as e:
         return False, str(e)
-
+ 
 def get_inbox_emails(max_results=10):
     try:
         access_token = get_access_token()
@@ -466,7 +466,7 @@ def get_inbox_emails(max_results=10):
     except Exception as e:
         print(f"Inbox error: {str(e)}")
         return []
-
+ 
 def draft_reply(email):
     try:
         response = client.messages.create(
@@ -478,10 +478,10 @@ def draft_reply(email):
         return response.content[0].text
     except Exception as e:
         return f"Could not draft: {str(e)}"
-
-
+ 
+ 
 # ── Google Calendar ───────────────────────────────────────────────────────────
-
+ 
 def get_upcoming_events(max_results=10):
     try:
         access_token = get_access_token()
@@ -499,7 +499,7 @@ def get_upcoming_events(max_results=10):
         return events
     except:
         return []
-
+ 
 def create_calendar_event(title, start, end, description=''):
     try:
         access_token = get_access_token()
@@ -518,7 +518,7 @@ def create_calendar_event(title, start, end, description=''):
         return False, str(response.json())
     except Exception as e:
         return False, str(e)
-
+ 
 def process_calendar_commands(text):
     pattern = r'CREATE_EVENT\|([^\|]+)\|([^\|]+)\|([^\|]+)\|?([^E]*)END_EVENT'
     results = []
@@ -528,20 +528,20 @@ def process_calendar_commands(text):
         success, link = create_calendar_event(title, start, end, description)
         results.append({'title': title, 'success': success, 'link': link})
     return results
-
-
+ 
+ 
 # ── Master Monitor ────────────────────────────────────────────────────────────
-
+ 
 def master_monitor():
     print("Master monitor started")
     last_briefing_day = -1
-
+ 
     while True:
         try:
             la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
             la_hour = la_time.hour
             la_day = la_time.timetuple().tm_yday
-
+ 
             if la_hour == 7 and la_day != last_briefing_day:
                 last_briefing_day = la_day
                 try:
@@ -568,7 +568,7 @@ def master_monitor():
                     send_push('☀️ Bina', 'Morning briefing ready.', BINA_URL + '?open=feed', notif_type='feed')
                 except Exception as e:
                     print(f"Morning briefing error: {str(e)}")
-
+ 
             seen = load_seen_emails()
             emails = get_inbox_emails(max_results=10)
             for email in emails:
@@ -592,14 +592,14 @@ def master_monitor():
                     else:
                         print(f"Filtered: {email['from']}")
             save_seen_emails(seen)
-
+ 
         except Exception as e:
             print(f"Monitor error: {str(e)}")
         time.sleep(60)
-
-
+ 
+ 
 # ── Email Processing ──────────────────────────────────────────────────────────
-
+ 
 def process_email_commands(text):
     pattern = r'SEND_EMAIL\|(.*?)\|(.*?)\|(.*?)END_EMAIL'
     results = []
@@ -607,32 +607,32 @@ def process_email_commands(text):
         success, error = send_email(to.strip(), subject.strip(), body.strip())
         results.append({'to': to.strip(), 'subject': subject.strip(), 'success': success, 'error': error})
     return results
-
+ 
 def clean_response(text):
     cleaned = re.sub(r'SEND_EMAIL\|.*?END_EMAIL', '', text, flags=re.DOTALL)
     cleaned = re.sub(r'CREATE_EVENT\|.*?END_EVENT', '', cleaned, flags=re.DOTALL)
     return cleaned.strip()
-
-
+ 
+ 
 # ── Routes ────────────────────────────────────────────────────────────────────
-
+ 
 @app.route('/')
 def index():
     return app.send_static_file('index.html')
-
+ 
 @app.route('/manifest.json')
 def manifest():
     return app.send_static_file('manifest.json')
-
+ 
 @app.route('/sw.js')
 def service_worker():
     return app.send_static_file('sw.js')
-
+ 
 @app.route('/clear-subs')
 def clear_subs():
     save_subscriptions([])
     return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Cleared!</h2>'
-
+ 
 @app.route('/subscribe', methods=['POST'])
 def subscribe():
     sub = request.json
@@ -642,17 +642,17 @@ def subscribe():
         save_subscriptions(subs)
     print(f"Subscription saved. Total: {len(subs)}")
     return jsonify({'success': True})
-
+ 
 @app.route('/vapid-public-key')
 def vapid_key():
     return jsonify({'key': VAPID_PUBLIC_KEY})
-
+ 
 @app.route('/notifications', methods=['GET'])
 def get_notifications():
     notifications = load_notifications()
     unread = [n for n in notifications if not n.get('read')]
     return jsonify({'notifications': notifications, 'unread_count': len(unread)})
-
+ 
 @app.route('/notifications/read/<notif_id>', methods=['POST'])
 def mark_read(notif_id):
     notifications = load_notifications()
@@ -661,7 +661,7 @@ def mark_read(notif_id):
             n['read'] = True
     save_notifications(notifications)
     return jsonify({'success': True})
-
+ 
 @app.route('/internal/add-notification', methods=['POST'])
 def internal_add_notification():
     """Internal endpoint for research worker to push notifications."""
@@ -685,7 +685,7 @@ def internal_add_notification():
         notif_type='feed'
     )
     return jsonify({'success': True})
-
+ 
 @app.route('/send-draft', methods=['POST'])
 def send_draft():
     data = request.json
@@ -700,22 +700,22 @@ def send_draft():
         send_push('Bina ✅', 'Reply sent.', BINA_URL + '?open=inbox', notif_type='email')
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': error})
-
+ 
 @app.route('/calendar', methods=['GET'])
 def get_calendar():
     return jsonify({'events': get_upcoming_events(max_results=10)})
-
+ 
 @app.route('/calendar/create', methods=['POST'])
 def create_event_route():
     data = request.json
     success, link = create_calendar_event(data.get('title'), data.get('start'), data.get('end'), data.get('description', ''))
     return jsonify({'success': success, 'link': link})
-
+ 
 @app.route('/test-push')
 def test_push():
     send_push('Bina 🔔', 'Test.', BINA_URL + '?open=feed', notif_type='feed')
     return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Push sent!</h2>'
-
+ 
 @app.route('/test-research')
 def test_research():
     """Manual trigger for testing."""
@@ -734,24 +734,28 @@ def test_research():
     except:
         pass
     return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Research worker running on bina-research service!</h2>'
-
+ 
 @app.route('/test-email')
 def test_email():
     success, error = send_email('iirawgunzsii@gmail.com', 'Test from Bina', 'Hey! Bina testing.')
     if success:
         return '<h2 style="color:green;font-family:monospace;padding:40px">✅ Email sent!</h2>'
     return f'<h2 style="color:red;font-family:monospace;padding:40px">❌ Failed: {error}</h2>'
-
+ 
 @app.route('/crypto')
 def get_crypto_route():
     return jsonify({'crypto': get_crypto_data(), 'fear_greed': get_fear_greed_index()})
-
+ 
 @app.route('/memories', methods=['GET'])
 def get_memories_route():
     query = request.args.get('q', 'Nathaniel')
     memories = search_memories(query, top_k=10, threshold=0.3)
     return jsonify({'memories': memories, 'count': len(memories)})
-
+ 
+@app.route('/tiktokvqGeSkDedicFPnJCRt89o26iAO5fmlFW.txt')
+def tiktok_verify():
+    return 'tiktokvqGeSkDedicFPnJCRt89o26iAO5fmlFW', 200, {'Content-Type': 'text/plain'}
+ 
 @app.route('/terms')
 def terms():
     return '''<html><body style="font-family:monospace;padding:40px;background:#000;color:#fff;max-width:800px">
@@ -759,7 +763,7 @@ def terms():
     <p>Last updated: May 2026</p>
     <p>BinaClips is a content scheduling and management tool for creators. By using this service, you agree to use it in accordance with all applicable platform terms and local laws. This service is provided as-is. For questions contact nathanielwerner13@gmail.com</p>
     </body></html>'''
-
+ 
 @app.route('/privacy')
 def privacy():
     return '''<html><body style="font-family:monospace;padding:40px;background:#000;color:#fff;max-width:800px">
@@ -767,7 +771,7 @@ def privacy():
     <p>Last updated: May 2026</p>
     <p>BinaClips collects only the information necessary to provide scheduling and posting services. We do not sell your data. OAuth tokens are stored securely and used only to post content on your behalf. For questions contact nathanielwerner13@gmail.com</p>
     </body></html>'''
-
+ 
 @app.route('/generate-vapid')
 def generate_vapid():
     try:
@@ -784,35 +788,35 @@ def generate_vapid():
     except Exception as e:
         import traceback
         return f'<pre style="color:red;padding:40px">{traceback.format_exc()}</pre>'
-
+ 
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
     user_message = data.get('message', '')
     conversation_history = data.get('history', [])
-
+ 
     la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
     la_time_str = la_time.strftime('%A, %B %d, %Y %I:%M %p')
     user_message_with_context = f"[LA Time: {la_time_str}]\n\n{user_message}"
-
+ 
     all_memories = get_all_context_memories(user_message)
     memory_context = format_memories(all_memories)
     msg_lower = user_message.lower()
-
+ 
     # Crypto trigger
     if any(word in msg_lower for word in ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 'solana', 'sol', 'price', 'coin']):
         crypto_data = get_crypto_data()
         fear_greed = get_fear_greed_index()
         user_message_with_context += f"\n\nLive crypto:\n{format_crypto_report(crypto_data, fear_greed)}"
-
+ 
     # Commodities trigger
     if any(word in msg_lower for word in ['gold', 'oil', 'commodity', 'commodities']):
         user_message_with_context += f"\n\nCommodities:\n{get_real_commodity_prices()}"
-
+ 
     # FRED trigger
     if any(word in msg_lower for word in ['fed', 'federal reserve', 'inflation', 'unemployment', 'economic data']):
         user_message_with_context += f"\n\nFRED Economic Data:\n{get_fred_data()}"
-
+ 
     # Search triggers
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'stock', 'weather', 'research', 'tell me about', 'what happened',
@@ -822,12 +826,12 @@ def chat():
                        'solar', 'nuclear', 'pipeline', 'utility', 'renewable']
     deep_triggers = ['research', 'deep dive', 'everything about', 'full report', 'analyze',
                      'investigate', 'background on', 'tell me about']
-
+ 
     if any(word in msg_lower for word in deep_triggers):
         user_message_with_context += f"\n\nDeep research:\n{web_search(user_message, num_results=5)}"
     elif any(word in msg_lower for word in search_triggers):
         user_message_with_context += f"\n\nSearch:\n{web_search(user_message)}"
-
+ 
     # Calendar trigger
     if any(word in msg_lower for word in ['schedule', 'calendar', 'meeting', 'tomorrow', 'what do i have']):
         events = get_upcoming_events(max_results=5)
@@ -835,31 +839,31 @@ def chat():
             user_message_with_context += f"\n\nCalendar:\n" + "\n".join([f"- {e['title']} at {e['start']}" for e in events])
         else:
             user_message_with_context += "\n\nCalendar is empty."
-
+ 
     messages = conversation_history + [{"role": "user", "content": user_message_with_context}]
-
+ 
     response = client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=2048,
         system=SYSTEM_PROMPT + memory_context,
         messages=messages
     )
-
+ 
     assistant_message = response.content[0].text
     email_results = process_email_commands(assistant_message)
     calendar_results = process_calendar_commands(assistant_message)
     display_message = clean_response(assistant_message)
-
+ 
     save_memory(f"Nathaniel: {user_message} | Bina: {display_message[:300]}", memory_type='conversation')
-
+ 
     if any(word in msg_lower for word in ['remember', 'save', 'note', 'important', "don't forget", 'remind me']):
         save_memory(f"IMPORTANT — Nathaniel said: {user_message}", memory_type='explicit')
-
+ 
     if any(word in msg_lower for word in ['my mom', 'my dad', 'my friend', 'my brother', 'my sister',
                                            'my girlfriend', 'i am', "i'm", 'i have', 'i work',
                                            'i live', 'i want', 'i hate', 'i love', 'my goal']):
         save_memory(f"Personal — Nathaniel: {user_message}", memory_type='personal')
-
+ 
     result = {'response': display_message}
     if email_results:
         sent = [e for e in email_results if e['success']]
@@ -876,12 +880,12 @@ def chat():
             result['event_created'] = f"📅 Event created: {created[0]['title']}"
             send_push('Bina 📅', f'"{created[0]["title"]}" added', BINA_URL + '?open=feed', notif_type='feed')
             save_memory(f"Created event: {created[0]['title']}", memory_type='calendar')
-
+ 
     return jsonify(result)
-
-
+ 
+ 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
-
+ 
 @app.route('/authorize')
 def authorize():
     params = {
@@ -893,7 +897,7 @@ def authorize():
         'prompt': 'consent'
     }
     return redirect('https://accounts.google.com/o/oauth2/auth?' + urlencode(params))
-
+ 
 @app.route('/oauth/callback')
 def oauth_callback():
     code = request.args.get('code')
@@ -916,12 +920,13 @@ def oauth_callback():
     <h2>OAuth</h2>
     <textarea style="width:100%;height:80px;background:#111;color:#0f0;padding:8px;">{refresh_token}</textarea>
     <p>{note}</p></body></html>"""
-
-
+ 
+ 
 # ── Start ─────────────────────────────────────────────────────────────────────
-
+ 
 monitor_thread = threading.Thread(target=master_monitor, daemon=True)
 monitor_thread.start()
-
+ 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+ 
