@@ -4,6 +4,7 @@ import time
 import datetime
 import threading
 import requests
+import urllib.request
 import uuid
 import re
 from anthropic import Anthropic
@@ -92,52 +93,126 @@ def save_scored_clips(clips):
     except:
         pass
 
-def get_kick_clips(streamer, limit=10):
+# Twitch app credentials (free dev account)
+TWITCH_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko'  # public web client id
+TWITCH_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+
+def get_twitch_token():
+    """Get app access token using public Twitch GQL (no auth needed for public clips)"""
+    try:
+        req = urllib.request.Request(
+            'https://id.twitch.tv/oauth2/token',
+            data=b'client_id=kimne78kx3ncx6brgo4mv6wki5h1ko&client_secret=&grant_type=client_credentials',
+            method='POST'
+        )
+    except:
+        pass
+    return None
+
+def get_twitch_clips(streamer, limit=10):
+    """Use Twitch GQL API - no auth required for public data"""
     clips = []
     try:
-        response = requests.get(
-            f'https://kick.com/api/v2/channels/{streamer}/clips',
-            params={'sort': 'date', 'time': 'day', 'page': 1},
-            headers={'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0'},
+        # Use Twitch GQL which works without OAuth for public clips
+        gql_query = {
+            "operationName": "ClipsCards__User",
+            "variables": {
+                "login": streamer,
+                "limit": limit,
+                "criteria": {
+                    "filter": "LAST_WEEK"
+                }
+            },
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "b73ad2bfaecfd30a9e6c28fada15bd97032c83ec77a0440766a56fe0bd632777"
+                }
+            }
+        }
+        response = requests.post(
+            'https://gql.twitch.tv/gql',
+            json=gql_query,
+            headers={
+                'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+                'Content-Type': 'application/json',
+                'User-Agent': TWITCH_USER_AGENT
+            },
             timeout=15
         )
         if response.status_code == 200:
             data = response.json()
-            clip_list = data.get('clips', data) if isinstance(data, dict) else data
-            for clip in clip_list[:limit]:
+            edges = (data.get('data', {}) or {}).get('user', {}) or {}
+            edges = edges.get('clips', {}).get('edges', []) if edges else []
+            for edge in edges[:limit]:
+                node = edge.get('node', {})
+                if not node:
+                    continue
                 clips.append({
-                    'id': str(clip.get('id', uuid.uuid4())),
-                    'title': clip.get('title', ''),
-                    'url': clip.get('clip_url', clip.get('url', '')),
-                    'views': clip.get('views', 0),
-                    'duration': clip.get('duration', 0),
+                    'id': node.get('id', str(uuid.uuid4())),
+                    'title': node.get('title', f'{streamer} clip'),
+                    'url': node.get('url', f'https://www.twitch.tv/{streamer}/clip/{node.get("id","")}'),
+                    'views': node.get('viewCount', 0),
+                    'duration': node.get('durationSeconds', 0),
                     'streamer': streamer,
-                    'platform': 'kick',
-                    'created_at': clip.get('created_at', ''),
-                    'likes': clip.get('likes', 0)
+                    'platform': 'twitch',
+                    'thumbnail': node.get('thumbnailURL', ''),
+                    'likes': 0
                 })
-    except Exception as e:
-        print(f"Kick error {streamer}: {str(e)}")
-    return clips
-
-def get_twitch_clips(streamer, limit=5):
-    clips = []
-    try:
-        results = web_search(f"twitch.tv/{streamer} best clip today viral", num_results=5)
-        twitch_urls = re.findall(r'https?://(?:www\.)?twitch\.tv/\S+/clip/([a-zA-Z0-9_-]+)', results)
-        for clip_id in twitch_urls[:limit]:
-            clips.append({
-                'id': clip_id,
-                'title': f'{streamer} twitch clip',
-                'url': f'https://www.twitch.tv/{streamer}/clip/{clip_id}',
-                'views': 0,
-                'duration': 0,
-                'streamer': streamer,
-                'platform': 'twitch',
-                'likes': 0
-            })
+            print(f"Twitch {streamer}: {len(clips)} clips")
+        else:
+            print(f"Twitch GQL {streamer}: status {response.status_code}")
     except Exception as e:
         print(f"Twitch error {streamer}: {str(e)}")
+    return clips
+
+def get_kick_clips(streamer, limit=10):
+    clips = []
+    # Try multiple Kick API formats
+    urls_to_try = [
+        f'https://kick.com/api/v2/channels/{streamer}/clips?sort=views&time=week',
+        f'https://kick.com/api/v1/channels/{streamer}/clips?sort=views',
+    ]
+    for api_url in urls_to_try:
+        try:
+            response = requests.get(
+                api_url,
+                headers={
+                    'Accept': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                    'Referer': 'https://kick.com',
+                    'Accept-Language': 'en-US,en;q=0.9'
+                },
+                timeout=15
+            )
+            print(f"Kick {streamer} ({api_url.split('?')[0].split('/')[-1]}): status {response.status_code}")
+            if response.status_code == 200:
+                data = response.json()
+                clip_list = []
+                if isinstance(data, list):
+                    clip_list = data
+                elif isinstance(data, dict):
+                    clip_list = data.get('clips', data.get('data', []))
+                for clip in clip_list[:limit]:
+                    url = clip.get('clip_url', clip.get('url', clip.get('video_url', '')))
+                    if not url:
+                        continue
+                    clips.append({
+                        'id': str(clip.get('id', uuid.uuid4())),
+                        'title': clip.get('title', f'{streamer} kick clip'),
+                        'url': url,
+                        'views': clip.get('views', clip.get('view_count', 0)),
+                        'duration': clip.get('duration', 0),
+                        'streamer': streamer,
+                        'platform': 'kick',
+                        'thumbnail': clip.get('thumbnail_url', clip.get('thumbnail', '')),
+                        'likes': clip.get('likes', clip.get('like_count', 0))
+                    })
+                if clips:
+                    print(f"Kick {streamer}: {len(clips)} clips")
+                    break
+        except Exception as e:
+            print(f"Kick error {streamer} {api_url}: {str(e)}")
     return clips
 
 def score_clips_with_ai(clips):
