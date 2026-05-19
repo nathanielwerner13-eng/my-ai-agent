@@ -350,15 +350,15 @@ Only clips scoring 6+."""
 
 
 YOUTUBE_CHANNELS = {
-    'DailyAiden': 'UCxxxxxx1',
+    'DailyAiden': 'UCCydYSK9VpWAm7lRm8P4FAw',
     'MrBeast': 'UCX6OQ3DkcsbYNE6H8uQQuVA',
     'IShowSpeed': 'UCnYMl86X-2LJtZXR_0turNQ',
-    'N3on': 'UCxxxxxx2',
+    'N3on': 'UCsiqlKIUDHZJVG4smMvhF4w',
     'FlightReacts': 'UCix-Pchl4JVs-PoKMFHB26w',
-    'NotYourAverageFlight': 'UCxxxxxx3',
+    'NotYourAverageFlight': 'UCoGIPQ7M4NWai7LRgRhaSOg',
     'PowerfulJRE': 'UCzWQYUVCpZqtN93H8RR44Qw',
     'Impaulsive': 'UCBoxAcRGnBp0g3OVtHXYgKw',
-    'Jynxzi': 'UCxxxxxx4'
+    'Jynxzi': 'UCjiXtODGCCulmhwypZAWSag'
 }
 
 def get_youtube_clips(channel_handle, channel_id, max_clips=5):
