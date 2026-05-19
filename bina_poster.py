@@ -13,8 +13,8 @@ app = Flask(__name__)
 CORS(app)
 
 BINA_URL = os.environ.get('BINA_URL', 'https://my-ai-agent-production-5e17.up.railway.app')
-TIKTOK_CLIENT_KEY = os.environ.get('TIKTOK_CLIENT_KEY', 'awk742w02fe7f0h5')
-TIKTOK_CLIENT_SECRET = os.environ.get('TIKTOK_CLIENT_SECRET', 'ALsj5j4T3gS50PNMToU0oQG1svUBreOP')
+TIKTOK_CLIENT_KEY = os.environ.get('TIKTOK_CLIENT_KEY', 'sbaw221skbq4k750t5')
+TIKTOK_CLIENT_SECRET = os.environ.get('TIKTOK_CLIENT_SECRET', 'ZgYdZqlIT37G2vT3ioHsD8kaZi4vQSZm')
 POSTER_URL = os.environ.get('POSTER_URL', '')
 
 ACCOUNTS_FILE = '/tmp/tiktok_accounts.json'
