@@ -500,7 +500,7 @@ if __name__ == '__main__':
 
 if __name__ == '__main__':
     def _clip_loop():
-        time.sleep(5)  # let Flask start first
+        time.sleep(60)  # let Flask start and pass healthcheck first
         run_clip_farm_cycle()
         while True:
             try:
