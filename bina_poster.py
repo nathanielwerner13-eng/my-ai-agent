@@ -103,14 +103,9 @@ def tiktok_callback():
     if not code:
         return '<h2 style="color:red;font-family:monospace;padding:40px">No code</h2>'
     try:
-        import base64 as _b64
-        _creds = _b64.b64encode(f'{TIKTOK_CLIENT_KEY}:{TIKTOK_CLIENT_SECRET}'.encode()).decode()
         token_response = requests.post(
             'https://open.tiktokapis.com/v2/oauth/token/',
-            headers={
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Authorization': f'Basic {_creds}'
-            },
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
             data={
                 'client_key': TIKTOK_CLIENT_KEY,
                 'client_secret': TIKTOK_CLIENT_SECRET,
