@@ -358,3 +358,25 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+if __name__ == '__main__':
+    import threading
+    def _main_loop():
+        global last_scan
+        last_scan = 0
+        last_scan = time.time()
+        run_clip_farm_cycle()
+        while True:
+            try:
+                now = time.time()
+                if now - last_scan > 1800:
+                    last_scan = now
+                    run_clip_farm_cycle()
+                time.sleep(60)
+            except Exception as e:
+                print(f"Scheduler error: {str(e)}")
+                time.sleep(60)
+    t = threading.Thread(target=_main_loop, daemon=True)
+    t.start()
+    port = int(os.environ.get('PORT', 5001))
+    flask_app.run(host='0.0.0.0', port=port)
