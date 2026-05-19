@@ -348,6 +348,61 @@ Only clips scoring 6+."""
             clip['score'] = min(10, max(1, clip.get('views', 0) // 1000))
         return sorted(clips, key=lambda x: x.get('score', 0), reverse=True)
 
+
+YOUTUBE_CHANNELS = {
+    'DailyAiden': 'UCxxxxxx1',
+    'MrBeast': 'UCX6OQ3DkcsbYNE6H8uQQuVA',
+    'IShowSpeed': 'UCnYMl86X-2LJtZXR_0turNQ',
+    'N3on': 'UCxxxxxx2',
+    'FlightReacts': 'UCix-Pchl4JVs-PoKMFHB26w',
+    'NotYourAverageFlight': 'UCxxxxxx3',
+    'PowerfulJRE': 'UCzWQYUVCpZqtN93H8RR44Qw',
+    'Impaulsive': 'UCBoxAcRGnBp0g3OVtHXYgKw',
+    'Jynxzi': 'UCxxxxxx4'
+}
+
+def get_youtube_clips(channel_handle, channel_id, max_clips=5):
+    try:
+        api_key = os.environ.get('YOUTUBE_API_KEY')
+        if not api_key:
+            print(f"YouTube: missing API key")
+            return []
+        url = f'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={channel_id}&order=viewCount&type=video&maxResults={max_clips}&videoDuration=short&key={api_key}'
+        yt_req = urllib.request.Request(url)
+        yt_res = json.loads(urllib.request.urlopen(yt_req).read())
+        clips = []
+        for item in yt_res.get('items', []):
+            vid_id = item['id'].get('videoId', '')
+            if not vid_id:
+                continue
+            snippet = item.get('snippet', {})
+            clips.append({
+                'id': vid_id,
+                'title': snippet.get('title', f'{channel_handle} clip'),
+                'url': f'https://www.youtube.com/watch?v={vid_id}',
+                'views': 0,
+                'duration': 0,
+                'streamer': channel_handle,
+                'platform': 'youtube',
+                'thumbnail': snippet.get('thumbnails', {}).get('high', {}).get('url', ''),
+                'likes': 0
+            })
+        print(f"YouTube {channel_handle}: {len(clips)} clips")
+        return clips
+    except Exception as e:
+        print(f"YouTube error {channel_handle}: {str(e)}")
+        return []
+
+def get_all_youtube_clips():
+    all_clips = []
+    for handle, channel_id in YOUTUBE_CHANNELS.items():
+        if 'xxxx' in channel_id:
+            continue
+        clips = get_youtube_clips(handle, channel_id)
+        all_clips.extend(clips)
+    return all_clips
+
+
 def run_clip_farm_cycle():
     now_str = datetime.datetime.now().strftime('%H:%M')
     print(f"\nCLIP FARM CYCLE - {now_str}")
