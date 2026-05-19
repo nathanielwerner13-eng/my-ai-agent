@@ -600,7 +600,33 @@ RESPONSE FORMAT — EXACTLY THIS:
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
 def get_la_time():
-    return datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
+    """LA time — DST aware. PDT=UTC-7 (Mar-Nov), PST=UTC-8 (Nov-Mar)"""
+    import time as _time
+    utc_now = datetime.datetime.utcnow()
+    # Use system DST info if available, else calculate manually
+    try:
+        import zoneinfo
+        from datetime import timezone
+        la_tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+        return datetime.datetime.now(la_tz).replace(tzinfo=None)
+    except Exception:
+        # Fallback: detect DST manually
+        # DST starts 2nd Sunday March, ends 1st Sunday November
+        month = utc_now.month
+        if 4 <= month <= 10:
+            offset = -7  # PDT
+        elif month == 3:
+            # 2nd Sunday of March
+            day = utc_now.day
+            dow = utc_now.weekday()  # Mon=0, Sun=6
+            second_sunday = 8 + (6 - (datetime.datetime(utc_now.year, 3, 1).weekday() + 1) % 7)
+            offset = -7 if day >= second_sunday else -8
+        elif month == 11:
+            first_sunday = 1 + (6 - (datetime.datetime(utc_now.year, 11, 1).weekday() + 1) % 7)
+            offset = -8 if utc_now.day >= first_sunday else -7
+        else:
+            offset = -8  # PST
+        return utc_now + datetime.timedelta(hours=offset)
 
 def main():
     print("=" * 50)
