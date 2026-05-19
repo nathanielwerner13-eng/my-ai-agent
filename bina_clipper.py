@@ -129,63 +129,54 @@ def get_twitch_token():
         pass
     return None
 
-def get_twitch_clips(streamer, limit=10):
-    """Use Twitch GQL API - no auth required for public data"""
-    clips = []
+def get_twitch_clips(streamer, max_clips=5):
+    import urllib.parse
     try:
-        # Use Twitch GQL which works without OAuth for public clips
-        gql_query = {
-            "operationName": "ClipsCards__User",
-            "variables": {
-                "login": streamer,
-                "limit": limit,
-                "criteria": {
-                    "filter": "LAST_WEEK"
-                }
-            },
-            "extensions": {
-                "persistedQuery": {
-                    "version": 1,
-                    "sha256Hash": "b73ad2bfaecfd30a9e6c28fada15bd97032c83ec77a0440766a56fe0bd632777"
-                }
-            }
-        }
-        response = requests.post(
-            'https://gql.twitch.tv/gql',
-            json=gql_query,
-            headers={
-                'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
-                'Content-Type': 'application/json',
-                'User-Agent': TWITCH_USER_AGENT
-            },
-            timeout=15
-        )
-        if response.status_code == 200:
-            data = response.json()
-            edges = (data.get('data', {}) or {}).get('user', {}) or {}
-            edges = edges.get('clips', {}).get('edges', []) if edges else []
-            for edge in edges[:limit]:
-                node = edge.get('node', {})
-                if not node:
-                    continue
-                clips.append({
-                    'id': node.get('id', str(uuid.uuid4())),
-                    'title': node.get('title', f'{streamer} clip'),
-                    'url': node.get('url', f'https://www.twitch.tv/{streamer}/clip/{node.get("id","")}'),
-                    'views': node.get('viewCount', 0),
-                    'duration': node.get('durationSeconds', 0),
-                    'streamer': streamer,
-                    'platform': 'twitch',
-                    'thumbnail': node.get('thumbnailURL', ''),
-                    'likes': 0
-                })
-            print(f"Twitch {streamer}: {len(clips)} clips")
-        else:
-            print(f"Twitch GQL {streamer}: status {response.status_code}")
+        client_id = os.environ.get('TWITCH_CLIENT_ID')
+        client_secret = os.environ.get('TWITCH_CLIENT_SECRET')
+        if not client_id or not client_secret:
+            print(f"Twitch {streamer}: missing credentials")
+            return []
+        token_data = urllib.parse.urlencode({
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'grant_type': 'client_credentials'
+        }).encode('utf-8')
+        token_req = urllib.request.Request('https://id.twitch.tv/oauth2/token', data=token_data, method='POST')
+        token_res = json.loads(urllib.request.urlopen(token_req).read())
+        access_token = token_res['access_token']
+        headers = {'Client-ID': client_id, 'Authorization': f'Bearer {access_token}'}
+        user_req = urllib.request.Request(f'https://api.twitch.tv/helix/users?login={streamer}', headers=headers)
+        user_res = json.loads(urllib.request.urlopen(user_req).read())
+        if not user_res.get('data'):
+            print(f"Twitch {streamer}: user not found")
+            return []
+        user_id = user_res['data'][0]['id']
+        from datetime import datetime, timezone, timedelta
+        started_at = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        clips_url = f'https://api.twitch.tv/helix/clips?broadcaster_id={user_id}&first=20&started_at={started_at}'
+        clips_req = urllib.request.Request(clips_url, headers=headers)
+        clips_res = json.loads(urllib.request.urlopen(clips_req).read())
+        clips = []
+        for clip in clips_res.get('data', []):
+            clips.append({
+                'id': clip.get('id', ''),
+                'title': clip.get('title', f'{streamer} clip'),
+                'url': clip.get('url', ''),
+                'views': clip.get('view_count', 0),
+                'duration': clip.get('duration', 0),
+                'streamer': streamer,
+                'platform': 'twitch',
+                'thumbnail': clip.get('thumbnail_url', ''),
+                'likes': 0
+            })
+        clips.sort(key=lambda x: x['views'], reverse=True)
+        clips = clips[:max_clips]
+        print(f"Twitch {streamer}: {len(clips)} clips")
+        return clips
     except Exception as e:
         print(f"Twitch error {streamer}: {str(e)}")
-    return clips
-
+        return []
 def get_kick_clips(streamer, limit=10):
     """Kick blocks direct API — use Serper to find clips"""
     clips = []
