@@ -496,17 +496,7 @@ def main():
             time.sleep(60)
 
 if __name__ == '__main__':
-    def _clip_loop():
-        time.sleep(60)  # let Flask start and pass healthcheck first
-        run_clip_farm_cycle()
-        while True:
-            try:
-                time.sleep(1800)
-                run_clip_farm_cycle()
-            except Exception as e:
-                print(f"Clip loop error: {str(e)}")
-                time.sleep(60)
-    threading.Thread(target=_clip_loop, daemon=True).start()
+    threading.Thread(target=main, daemon=True).start()
     port = int(os.environ.get('PORT', 5001))
     print(f"Clipper Flask starting on port {port}")
     flask_app.run(host='0.0.0.0', port=port)
