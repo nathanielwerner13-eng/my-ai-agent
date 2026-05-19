@@ -21,7 +21,17 @@ FRED_API_KEY = os.environ.get('FRED_API_KEY', '')
 ALPHA_VANTAGE_KEY = os.environ.get('ALPHA_VANTAGE_KEY', '')
 
 SEEN_NEWS_FILE = '/tmp/seen_news.json'
-MARKET_HISTORY_FILE = '/tmp/market_history.json'
+
+# ── Energy & Infrastructure Stock Universe ────────────────────────────────────
+# Majors, midstream, utilities, renewables, nuclear
+ENERGY_STOCKS = {
+    'majors': ['XOM', 'CVX', 'COP', 'SLB', 'HAL', 'OXY', 'BP', 'SHEL', 'TTE', 'EOG'],
+    'midstream': ['KMI', 'WMB', 'OKE', 'ET', 'EPD', 'MPLX', 'PAA', 'TRGP'],
+    'utilities': ['NEE', 'D', 'SO', 'DUK', 'AEP', 'EXC', 'SRE', 'PCG', 'ED', 'XEL'],
+    'renewables': ['ENPH', 'FSLR', 'RUN', 'SEDG', 'BEP', 'CWEN', 'NEP', 'AY'],
+    'nuclear': ['CEG', 'VST', 'NRG', 'SMR', 'OKLO', 'NNE'],
+    'infrastructure': ['AWK', 'WM', 'RSG', 'AECOM', 'PWR', 'EMN', 'APD']
+}
 
 print("Bina Research Worker starting...")
 
@@ -163,227 +173,6 @@ def format_articles(articles, max=15):
     return output
 
 
-# ── Polymarket ────────────────────────────────────────────────────────────────
-
-def get_all_polymarket_markets(limit=200):
-    try:
-        response = requests.get(
-            'https://gamma-api.polymarket.com/markets',
-            params={'limit': limit, 'active': 'true', 'closed': 'false'},
-            timeout=20
-        )
-        if response.status_code != 200:
-            return []
-
-        markets = response.json()
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        processed = []
-
-        for m in markets:
-            title = str(m.get('question', m.get('title', '')))
-            title_lower = title.lower()
-
-            # Skip GTA VI floor contracts only
-            if any(s in title_lower for s in ['gta vi', 'gta6', 'grand theft auto']):
-                continue
-
-            volume = m.get('volume', 0) or 0
-            try:
-                volume = float(str(volume).replace(',', ''))
-            except:
-                volume = 0
-
-            yes_price = None
-            no_price = None
-            try:
-                op = m.get('outcomePrices', '[]')
-                if isinstance(op, str):
-                    prices = json.loads(op)
-                elif isinstance(op, list):
-                    prices = op
-                else:
-                    prices = []
-                if len(prices) >= 2:
-                    yes_price = float(prices[0])
-                    no_price = float(prices[1])
-                elif len(prices) == 1:
-                    yes_price = float(prices[0])
-                    no_price = 1 - yes_price
-            except:
-                pass
-
-            end_date = m.get('endDate', '')
-            days_until = None
-            end_str = 'Unknown'
-            if end_date:
-                try:
-                    end_dt = datetime.datetime.fromisoformat(
-                        end_date.replace('Z', '+00:00'))
-                    days_until = (end_dt - now_utc).days
-                    if days_until < 0:
-                        continue
-                    end_str = end_dt.strftime('%b %d, %Y')
-                except:
-                    pass
-
-            description = (m.get('description', '') or '')[:500]
-            has_floor = any(p in description.lower() for p in
-                          ['50-50', '50/50', 'neither', 'resolve 0.5', '0.50'])
-
-            # Wide filter — skip only near-certain
-            if yes_price and (yes_price > 0.95 or yes_price < 0.05):
-                continue
-
-            processed.append({
-                'title': title,
-                'yes_price': yes_price,
-                'no_price': no_price,
-                'volume': volume,
-                'end_date': end_str,
-                'days_until': days_until,
-                'has_floor': has_floor,
-                'description': description,
-                'tags': [t.get('label', '') if isinstance(t, dict) else str(t)
-                         for t in (m.get('tags') or [])]
-            })
-
-        processed.sort(key=lambda x: x['volume'], reverse=True)
-        print(f"Polymarket: {len(processed)} markets")
-        return processed
-    except Exception as e:
-        print(f"Polymarket error: {str(e)}")
-        return []
-
-
-# ── Market History ────────────────────────────────────────────────────────────
-
-def load_market_history():
-    try:
-        if os.path.exists(MARKET_HISTORY_FILE):
-            with open(MARKET_HISTORY_FILE, 'r') as f:
-                return json.load(f)
-    except:
-        pass
-    return {}
-
-def save_market_history(markets):
-    try:
-        history = {}
-        for m in markets:
-            if m.get('yes_price'):
-                history[m['title']] = {
-                    'yes': m['yes_price'],
-                    'time': time.time()
-                }
-        with open(MARKET_HISTORY_FILE, 'w') as f:
-            json.dump(history, f)
-    except:
-        pass
-
-def detect_odds_movement(markets, history):
-    movements = []
-    for m in markets:
-        title = m['title']
-        yes = m.get('yes_price')
-        if not yes or title not in history:
-            continue
-        old = history[title].get('yes', yes)
-        diff = yes - old
-        if abs(diff) > 0.03:
-            movements.append({
-                'title': title,
-                'old_yes': old,
-                'new_yes': yes,
-                'diff': diff,
-                'volume': m.get('volume', 0),
-                'end_date': m.get('end_date', '?'),
-                'days_until': m.get('days_until')
-            })
-    movements.sort(key=lambda x: abs(x['diff']), reverse=True)
-    return movements
-
-
-# ── VERIFIED Sports Data ──────────────────────────────────────────────────────
-
-def get_verified_nba_status():
-    """Run multiple searches and build a verified picture of NBA status.
-    Returns a fact-checked summary only — no hallucination."""
-    print("  Verifying NBA status with multiple searches...")
-    searches = [
-        "NBA playoffs 2026 conference finals teams who is playing right now",
-        "NBA Finals 2026 teams confirmed who advanced",
-        "OKC Thunder NBA playoffs 2026 current status eliminated or alive",
-        "San Antonio Spurs NBA playoffs 2026 current status",
-        "New York Knicks NBA playoffs 2026 current status",
-        "NBA bracket 2026 conference finals matchups today"
-    ]
-    all_results = ""
-    for s in searches:
-        result = web_search(s, num_results=5)
-        all_results += f"\n{result}"
-        time.sleep(1.5)
-
-    # Ask Claude to extract ONLY verified facts
-    try:
-        extract = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=400,
-            messages=[{"role": "user", "content": f"""From these search results, extract ONLY verified NBA playoff facts.
-If something is not clearly confirmed in multiple sources, say "UNCONFIRMED".
-Do NOT infer or assume — only state what is explicitly mentioned.
-
-SEARCH RESULTS:
-{all_results[:3000]}
-
-Format:
-- Teams confirmed in NBA Finals or Conference Finals: [list or UNKNOWN]
-- Teams confirmed eliminated: [list or UNKNOWN]  
-- Current series scores if mentioned: [details or UNKNOWN]
-- OKC Thunder status: [alive/eliminated/UNKNOWN]
-- San Antonio Spurs status: [alive/eliminated/UNKNOWN]
-- New York Knicks status: [alive/eliminated/UNKNOWN]
-- Any other confirmed facts: [details]"""}]
-        )
-        return all_results, extract.content[0].text
-    except:
-        return all_results, "Could not verify NBA status"
-
-def get_verified_nhl_status():
-    """Verified NHL status."""
-    print("  Verifying NHL status...")
-    searches = [
-        "NHL playoffs 2026 conference finals teams playing now",
-        "Colorado Avalanche NHL playoffs 2026 current status series",
-        "Carolina Hurricanes NHL playoffs 2026 current status series",
-        "NHL Stanley Cup Finals 2026 teams confirmed",
-        "NHL bracket 2026 conference finals matchups"
-    ]
-    all_results = ""
-    for s in searches:
-        result = web_search(s, num_results=5)
-        all_results += f"\n{result}"
-        time.sleep(1.5)
-
-    try:
-        extract = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=300,
-            messages=[{"role": "user", "content": f"""Extract ONLY verified NHL playoff facts. If not clearly confirmed, say UNKNOWN.
-
-{all_results[:2000]}
-
-Format:
-- Teams in Conference Finals: [list or UNKNOWN]
-- Teams eliminated: [list or UNKNOWN]
-- Colorado Avalanche status: [alive/eliminated/UNKNOWN + series info]
-- Carolina Hurricanes status: [alive/eliminated/UNKNOWN + series info]
-- Vegas Golden Knights status: [alive/eliminated/UNKNOWN]"""}]
-        )
-        return all_results, extract.content[0].text
-    except:
-        return all_results, "Could not verify NHL status"
-
-
 # ── FRED ──────────────────────────────────────────────────────────────────────
 
 def get_fred_snapshot():
@@ -394,7 +183,8 @@ def get_fred_snapshot():
         'UNRATE': 'Unemployment',
         'DGS10': '10yr Treasury',
         'DCOILWTICO': 'WTI Oil',
-        'GOLDAMGBD228NLBM': 'Gold'
+        'GOLDAMGBD228NLBM': 'Gold',
+        'DHHNGSP': 'Natural Gas'
     }
     output = ""
     for series_id, name in indicators.items():
@@ -420,6 +210,148 @@ def get_fred_snapshot():
     return output
 
 
+# ── Alpha Vantage Stock Data ──────────────────────────────────────────────────
+
+def get_stock_quote(symbol):
+    """Get real-time quote for a single stock via Alpha Vantage."""
+    if not ALPHA_VANTAGE_KEY:
+        return None
+    try:
+        r = requests.get(
+            'https://www.alphavantage.co/query',
+            params={
+                'function': 'GLOBAL_QUOTE',
+                'symbol': symbol,
+                'apikey': ALPHA_VANTAGE_KEY
+            },
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json().get('Global Quote', {})
+            if data and data.get('05. price'):
+                return {
+                    'symbol': symbol,
+                    'price': float(data.get('05. price', 0)),
+                    'change': float(data.get('09. change', 0)),
+                    'change_pct': data.get('10. change percent', '0%').replace('%', ''),
+                    'volume': int(data.get('06. volume', 0)),
+                    'prev_close': float(data.get('08. previous close', 0))
+                }
+        return None
+    except:
+        return None
+
+def get_energy_sector_prices():
+    """Pull prices for key energy/infra names. Alpha Vantage free tier = 25 req/day.
+    We sample the highest-signal names only."""
+    watchlist = ['XOM', 'CVX', 'NEE', 'CEG', 'KMI', 'COP', 'OXY', 'FSLR', 'VST', 'WMB']
+    results = []
+    for symbol in watchlist:
+        quote = get_stock_quote(symbol)
+        if quote:
+            results.append(quote)
+        time.sleep(1.5)  # respect rate limit
+    return results
+
+def format_stock_prices(quotes):
+    if not quotes:
+        return "Stock prices unavailable (Alpha Vantage limit hit — use search fallback).\n"
+    output = ""
+    for q in quotes:
+        pct = float(q.get('change_pct', 0))
+        arrow = '📈' if pct > 0 else '📉'
+        output += f"{arrow} **{q['symbol']}**: ${q['price']:.2f} | {pct:+.2f}% | Vol: {q['volume']:,}\n"
+    return output
+
+
+# ── Energy Infrastructure Research ───────────────────────────────────────────
+
+def research_energy_sector():
+    """Deep research into energy infrastructure stocks and opportunities."""
+    print("  Energy sector research...")
+    output = ""
+
+    searches = [
+        # Macro energy drivers
+        "oil price forecast today WTI Brent",
+        "natural gas price today LNG",
+        "energy sector ETF XLE XLU performance today",
+        "electricity demand AI data centers power grid 2025 2026",
+        "nuclear energy stocks outlook 2025 2026",
+
+        # Specific catalyst searches
+        "Exxon XOM earnings news analyst upgrade downgrade",
+        "NextEra Energy NEE solar wind news today",
+        "Constellation Energy CEG nuclear data center deal",
+        "Kinder Morgan KMI pipeline news today",
+        "ConocoPhillips COP oil production news",
+
+        # Macro/geopolitical energy drivers
+        "OPEC production decision oil supply news",
+        "US LNG export approval news today",
+        "power grid infrastructure spending bill news",
+        "renewable energy IRA tax credit news today",
+        "electricity utility earnings season news",
+
+        # Sector rotation / institutional moves
+        "energy stocks institutional buying today hedge fund",
+        "energy infrastructure dividend yield comparison today",
+        "midstream pipeline MLP distribution news today",
+        "solar energy stocks catalyst today FSLR ENPH",
+        "uranium nuclear fuel price news today"
+    ]
+
+    for i, s in enumerate(searches):
+        result = web_search(s, num_results=4)
+        output += f"\n{result}"
+        time.sleep(1.5)
+        if (i + 1) % 5 == 0:
+            print(f"    Energy searches: {i+1}/{len(searches)}")
+
+    return output
+
+def research_daily_opportunities():
+    """Scan for daily investment opportunities across sectors."""
+    print("  Daily opportunities research...")
+    output = ""
+
+    searches = [
+        # Market-wide opportunity scans
+        "stocks with unusual options activity today",
+        "stocks making 52-week high today",
+        "analyst upgrade target raise today",
+        "earnings beat positive guidance today",
+        "short squeeze candidates today high short interest",
+
+        # Crypto opportunities
+        "Bitcoin price today technical analysis",
+        "Ethereum price today catalyst",
+        "Solana SOL price news today",
+        "crypto market sentiment today",
+
+        # Macro market drivers
+        "S&P 500 today market moving news",
+        "10 year treasury yield today impact stocks",
+        "dollar index DXY today impact commodities",
+        "VIX volatility index today market fear",
+
+        # Specific opportunity types
+        "IPO this week upcoming news",
+        "merger acquisition deal announced today",
+        "FDA approval biotech catalyst today",
+        "earnings this week big names schedule"
+    ]
+
+    for i, s in enumerate(searches):
+        result = web_search(s, num_results=4)
+        output += f"\n{result}"
+        time.sleep(1.5)
+        if (i + 1) % 5 == 0:
+            print(f"    Opportunity searches: {i+1}/{len(searches)}")
+
+    return output
+
+
 # ── Seen News ─────────────────────────────────────────────────────────────────
 
 def load_seen_news():
@@ -439,78 +371,43 @@ def save_seen_news(seen):
         pass
 
 
-# ── Deep Political Research ───────────────────────────────────────────────────
-
-def deep_political_research():
-    """30 searches — real political coverage."""
-    output = ""
-    topics = [
-        "Trump major policy announcement today",
-        "US Congress legislation vote today",
-        "2026 midterm election polling",
-        "China Taiwan military news today",
-        "Russia Ukraine war ceasefire today",
-        "Israel Iran nuclear news today",
-        "Middle East conflict breaking today",
-        "NATO military news today",
-        "North Korea missile news",
-        "Strait of Hormuz oil shipping news",
-        "OPEC oil production news today",
-        "Saudi Arabia geopolitical news",
-        "India Pakistan tensions today",
-        "South China Sea military today",
-        "Federal Reserve rate decision news",
-        "US inflation CPI data today",
-        "oil price geopolitical risk today",
-        "sanctions news today",
-        "trade war tariffs news today",
-        "Polymarket political odds movement today",
-        "election prediction market odds today",
-        "geopolitical risk market impact today",
-        "political crisis breaking today",
-        "war escalation news today",
-        "Trump approval rating latest poll",
-        "2028 presidential race news",
-        "Republican Democrat news today",
-        "world leaders summit meeting today",
-        "nuclear deal talks news today",
-        "coup assassination political news today"
-    ]
-    for i, topic in enumerate(topics):
-        result = web_search(topic, num_results=3)
-        output += f"\n{result}"
-        time.sleep(1.5)
-        if (i + 1) % 10 == 0:
-            print(f"  Political: {i+1}/{len(topics)} done")
-    return output
-
-
 # ── Breaking News Monitor ─────────────────────────────────────────────────────
 
 def run_breaking_news_monitor():
     print(f"Breaking news: {datetime.datetime.now().strftime('%H:%M')}")
     triggers = [
-        'strait of hormuz', 'taiwan strait', 'china military', 'invasion',
-        'nuclear', 'ceasefire', 'war declared', 'troops deployed',
-        'sanctions', 'nato invoked', 'missile launch', 'attacked',
+        # Energy/infra triggers
+        'oil embargo', 'opec emergency', 'pipeline explosion', 'refinery fire',
+        'power grid failure', 'electricity shortage', 'gas shortage',
+        'strait of hormuz', 'oil supply cut', 'energy crisis',
+        'nuclear plant', 'lng terminal', 'oil sanctions',
+        # Market triggers
         'federal reserve emergency', 'rate cut surprise', 'rate hike surprise',
-        'market crash', 'bank collapse', 'debt default', 'oil embargo',
-        'opec emergency', 'trump impeach', 'assassination attempt', 'coup',
-        'series clinched', 'advances to finals', 'eliminated playoffs',
-        'nba finals', 'stanley cup', 'world cup result'
+        'market crash', 'bank collapse', 'debt default', 'stock circuit breaker',
+        'recession confirmed', 'cpi surprise', 'inflation surge',
+        # Geopolitical triggers
+        'invasion', 'war declared', 'missile launch', 'sanctions',
+        'coup', 'assassination attempt', 'nato invoked',
+        'taiwan strait', 'china military', 'nuclear',
+        # Company-specific triggers
+        'exxon mobil acquisition', 'chevron deal', 'nextera earnings',
+        'constellation energy deal', 'kinder morgan dividend',
+        'sec investigation energy', 'energy company bankruptcy'
     ]
 
     seen_news = load_seen_news()
     alerts = []
 
     all_articles = []
-    for cat in ['general', 'politics', 'business', 'sports']:
+    for cat in ['general', 'business']:
         all_articles.extend(get_news(category=cat))
         time.sleep(0.5)
 
-    for query in ['breaking geopolitical crisis today',
-                  'NBA playoffs result tonight',
-                  'NHL playoffs result tonight']:
+    for query in [
+        'breaking energy oil gas news today',
+        'stock market crash emergency today',
+        'geopolitical crisis breaking today'
+    ]:
         all_articles.extend(get_news(query=query, hours=3))
         time.sleep(0.5)
 
@@ -542,9 +439,10 @@ def run_breaking_news_monitor():
                 body += f"{alert['description'][:150]}\n"
             body += f"Triggers: {', '.join(alert['keywords'][:2])}\n\n"
 
-        market_search = web_search(
-            f"Polymarket odds {alerts[0]['title'][:50]}", num_results=3)
-        body += f"**Market impact:**\n{market_search[:300]}"
+        # Follow up with sector impact
+        impact_search = web_search(
+            f"stock market impact {alerts[0]['title'][:50]}", num_results=3)
+        body += f"**Market impact:**\n{impact_search[:300]}"
 
         push_to_main_app(
             f"🚨 Breaking: {alerts[0]['title'][:55]}", body)
@@ -553,236 +451,127 @@ def run_breaking_news_monitor():
         print("No breaking alerts")
 
 
-# ── Sports Monitor ────────────────────────────────────────────────────────────
+# ── MAIN INTELLIGENCE REPORT ──────────────────────────────────────────────────
 
-def run_sports_monitor():
-    print(f"Sports monitor: {datetime.datetime.now().strftime('%H:%M')}")
-
-    all_markets = get_all_polymarket_markets(limit=200)
-    sports_kw = ['nba', 'nhl', 'finals', 'stanley cup', 'world cup', 'fifa',
-                 'spurs', 'thunder', 'knicks', 'cavalier', 'avalanche',
-                 'hurricane', 'france', 'spain', 'england', 'brazil',
-                 'argentina', 'portugal', 'germany', 'netherlands']
-    sports_markets = [m for m in all_markets if any(
-        kw in m['title'].lower() for kw in sports_kw)]
-
-    if not sports_markets:
-        print("No sports markets")
-        return
-
-    # Get VERIFIED status before making any calls
-    nba_raw, nba_verified = get_verified_nba_status()
-    nhl_raw, nhl_verified = get_verified_nhl_status()
-
-    # Arb math
-    wc = [m for m in sports_markets if
-          ('world cup' in m['title'].lower() or 'fifa' in m['title'].lower())
-          and m.get('yes_price', 0) > 0.04]
-    nba_f = [m for m in sports_markets if
-             'nba finals' in m['title'].lower() and m.get('yes_price')]
-    nhl_c = [m for m in sports_markets if
-             'stanley cup' in m['title'].lower() and m.get('yes_price')]
-
-    wc_total = sum(m.get('yes_price', 0) for m in wc)
-    nba_total = sum(m.get('yes_price', 0) for m in nba_f)
-    nhl_total = sum(m.get('yes_price', 0) for m in nhl_c)
-
-    prompt = f"""You are Bina's sports analyst. You have VERIFIED facts about current playoff status.
-
-VERIFIED NBA STATUS (extracted from multiple sources):
-{nba_verified}
-
-VERIFIED NHL STATUS:
-{nhl_verified}
-
-ACTIVE MARKETS:
-{chr(10).join([f"• {m['title']}: YES {m.get('yes_price',0):.1%} | ${m.get('volume',0):,.0f} | {m.get('end_date','?')} ({m.get('days_until','?')}d)" for m in sports_markets[:15]])}
-
-NBA Finals market totals: {nba_total:.1%} (gap: {1-nba_total:.1%})
-NHL Cup market totals: {nhl_total:.1%} (gap: {1-nhl_total:.1%})
-World Cup top teams total: {wc_total:.1%} (gap: {1-wc_total:.1%})
-
-CRITICAL RULES:
-- ONLY make a pick if the verified status above CONFIRMS the team is still alive
-- If status is UNKNOWN, say "Need game data — no sports picks until confirmed"
-- Do NOT hallucinate series scores or bracket positions
-- World Cup "gap" is NOT an arb — you cannot profit by buying all teams since only one wins
-- NBA/NHL gap IS meaningful if a team is missing from the market (truly unrepresented)
-- Keep under 200 words
-- Format: **Market** | Odds | BUY YES/NO | Why (verified fact only)"""
-
-    try:
-        response = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        result = response.content[0].text
-
-        if 'need game data' not in result.lower():
-            push_to_main_app(
-                f"🏀 Sports — {datetime.datetime.now().strftime('%H:%M')}",
-                result
-            )
-        print(f"Sports done")
-    except Exception as e:
-        print(f"Sports error: {str(e)}")
-
-
-# ── MAIN DEEP RESEARCH ────────────────────────────────────────────────────────
-
-def run_deep_research():
+def run_intelligence_report(report_slot):
+    """
+    report_slot: 'morning' (7am), 'afternoon' (1pm), 'evening' (8pm)
+    Each slot has slightly different focus.
+    """
     start_time = time.time()
     now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    slot_labels = {
+        'morning':   '☀️ Morning',
+        'afternoon': '📊 Afternoon',
+        'evening':   '🌙 Evening'
+    }
+    label = slot_labels.get(report_slot, '🧠')
+
     print(f"\n{'='*50}")
-    print(f"DEEP RESEARCH — {now_str}")
+    print(f"INTELLIGENCE REPORT [{report_slot.upper()}] — {now_str}")
     print(f"{'='*50}")
 
     data = {}
 
-    # Phase 1 — Markets
-    print("\n[1/7] Polymarket scan...")
-    all_markets = get_all_polymarket_markets(limit=200)
-    history = load_market_history()
-    movements = detect_odds_movement(all_markets, history)
-    save_market_history(all_markets)
-    data['markets'] = all_markets
-    data['movements'] = movements
-    print(f"Markets: {len(all_markets)} | Movements: {len(movements)}")
-    time.sleep(5)
-
-    # Phase 2 — Deep political
-    print("\n[2/7] Deep political (30 searches)...")
-    data['political'] = deep_political_research()
-    print("Political done")
-    time.sleep(5)
-
-    # Phase 3 — News
-    print("\n[3/7] News collection...")
-    world_news = get_news(category='world') or []
-    pol_news = get_news(category='politics') or []
-    sports_news = get_news(category='sports') or []
-    biz_news = get_news(category='business') or []
-    all_news = world_news + pol_news + sports_news + biz_news
-    data['news'] = format_articles(all_news, max=25)
-    print(f"News: {len(all_news)} articles")
-    time.sleep(5)
-
-    # Phase 4 — VERIFIED sports
-    print("\n[4/7] Verified sports research...")
-    nba_raw, nba_verified = get_verified_nba_status()
-    time.sleep(3)
-    nhl_raw, nhl_verified = get_verified_nhl_status()
-    data['nba_verified'] = nba_verified
-    data['nhl_verified'] = nhl_verified
-    data['nba_raw'] = nba_raw
-    data['nhl_raw'] = nhl_raw
-    print("Sports verified")
-    time.sleep(5)
-
-    # Phase 5 — FRED
-    print("\n[5/7] FRED data...")
+    # Phase 1 — FRED macro snapshot
+    print("\n[1/5] FRED macro data...")
     data['fred'] = get_fred_snapshot()
     print("FRED done")
+    time.sleep(3)
+
+    # Phase 2 — Energy sector stock prices
+    print("\n[2/5] Energy stock prices...")
+    quotes = get_energy_sector_prices()
+    data['stock_prices'] = format_stock_prices(quotes)
+    data['raw_quotes'] = quotes
+    print(f"Prices: {len(quotes)} quotes")
+    time.sleep(3)
+
+    # Phase 3 — Energy sector deep research
+    print("\n[3/5] Energy sector research (20 searches)...")
+    data['energy_research'] = research_energy_sector()
+    print("Energy research done")
     time.sleep(5)
 
-    # Phase 6 — Odds movements
-    print("\n[6/7] Odds movements...")
-    movements_text = ""
-    if movements:
-        movements_text = "**Odds moved since last check:**\n"
-        for mv in movements[:5]:
-            arrow = "⬆️" if mv['diff'] > 0 else "⬇️"
-            movements_text += f"{arrow} **{mv['title']}**: {mv['old_yes']:.1%} → {mv['new_yes']:.1%} ({mv['diff']:+.1%}) | {mv['end_date']}\n"
-    print(f"Movements: {len(movements)}")
+    # Phase 4 — Daily investment opportunities
+    print("\n[4/5] Daily opportunity scan (17 searches)...")
+    data['opportunities'] = research_daily_opportunities()
+    print("Opportunity scan done")
     time.sleep(5)
 
-    # Phase 7 — Single synthesis call
+    # Phase 5 — News
+    print("\n[5/5] News collection...")
+    biz_news = get_news(category='business') or []
+    gen_news = get_news(category='general') or []
+    all_news = biz_news + gen_news
+    data['news'] = format_articles(all_news, max=20)
+    print(f"News: {len(all_news)} articles")
+    time.sleep(3)
+
+    # Synthesis
     elapsed = time.time() - start_time
-    print(f"\n[7/7] Single synthesis call ({elapsed:.0f}s collected)...")
+    print(f"\nSynthesis call ({elapsed:.0f}s collected)...")
 
-    def fmt(markets, n=25):
-        out = ""
-        for m in markets[:n]:
-            yes = m.get('yes_price')
-            vol = m.get('volume', 0)
-            end = m.get('end_date', '?')
-            days = m.get('days_until', '?')
-            floor = " [FLOOR-AVOID]" if m.get('has_floor') else ""
-            if yes:
-                out += f"• {m['title']}: YES {yes:.1%} | ${vol:,.0f} | {end} ({days}d){floor}\n"
-        return out
+    # Build stock context string
+    stock_context = ""
+    for q in data.get('raw_quotes', []):
+        pct = float(q.get('change_pct', 0))
+        arrow = '📈' if pct > 0 else '📉'
+        stock_context += f"{arrow} {q['symbol']}: ${q['price']:.2f} ({pct:+.2f}%)\n"
 
-    # Sports arb
-    wc = [m for m in all_markets if
-          ('world cup' in m['title'].lower() or 'fifa' in m['title'].lower())
-          and m.get('yes_price', 0) > 0.04]
-    nba_f = [m for m in all_markets if
-             'nba finals' in m['title'].lower() and m.get('yes_price')]
-    nhl_c = [m for m in all_markets if
-             'stanley cup' in m['title'].lower() and m.get('yes_price')]
+    slot_focus = {
+        'morning': "Focus: What to watch TODAY. Flag pre-market movers, overnight news impact, morning setups. Energy stocks to buy/avoid today.",
+        'afternoon': "Focus: Midday update. What moved since morning and why. Afternoon setups. Any position adjustments needed.",
+        'evening': "Focus: End-of-day recap. What happened today. Best setups for TOMORROW. Overnight watch list. Any after-hours earnings/news."
+    }
 
-    wc_total = sum(m.get('yes_price', 0) for m in wc)
-    nba_total = sum(m.get('yes_price', 0) for m in nba_f)
-    nhl_total = sum(m.get('yes_price', 0) for m in nhl_c)
+    synthesis_prompt = f"""You are Bina giving Nathaniel his {report_slot} intelligence report. SHARP and ACTIONABLE.
 
-    synthesis_prompt = f"""You are Bina giving Nathaniel his intelligence report. SHORT and ACTIONABLE.
+Report slot: {label} | Research time: {elapsed:.0f}s
 
-Research time: {elapsed:.0f}s | Markets: {len(all_markets)} | News articles: {len(all_news)}
+{slot_focus.get(report_slot, '')}
 
 ═══ CRITICAL RULES ═══
-1. MAX 5 picks total across ALL categories
-2. Each pick = exactly one line: **Market** | YES X% | Resolves date (Xd) | BUY YES or BUY NO | H/M/L | One sentence WHY using SPECIFIC data
-3. For sports picks: you MUST reference the VERIFIED STATUS below — if status is UNKNOWN, do NOT make a sports pick
-4. World Cup "gap" is NOT an arb opportunity — skip it. Only flag NBA/NHL gap if a confirmed finalist team has NO market
-5. Skip floor contracts, skip markets resolving >300 days out
-6. If odds moved significantly, always flag that first — someone knows something
-7. ONE synthesis only — do not contradict yourself
-8. Under 250 words total
+1. MAX 5 investment picks/opportunities
+2. Each pick = one line: **TICKER** | $Price | Δ% | BUY/WATCH/AVOID | H/M/L confidence | One sentence why (specific catalyst)
+3. Be SPECIFIC — name the catalyst, the price level, the reason
+4. Only make picks with a clear catalyst from the research data below
+5. Separate picks from general market context
+6. Under 300 words total
 
-═══ VERIFIED SPORTS STATUS ═══
+═══ LIVE STOCK PRICES ═══
+{stock_context if stock_context else "Prices unavailable — use search data"}
 
-NBA VERIFIED FACTS:
-{data.get('nba_verified', 'UNKNOWN — do not make NBA picks')}
+═══ FRED MACRO DATA ═══
+{data.get('fred', 'Unavailable')}
 
-NHL VERIFIED FACTS:
-{data.get('nhl_verified', 'UNKNOWN — do not make NHL picks')}
+═══ ENERGY SECTOR RESEARCH ═══
+{data.get('energy_research', '')[:3000]}
 
-═══ ALL MARKETS ({len(all_markets)} total) ═══
-{fmt(all_markets, 25)}
-
-═══ ODDS MOVEMENTS ═══
-{movements_text if movements_text else "No significant movements since last check"}
-
-═══ NBA FINALS MARKET ({len(nba_f)} teams, total {nba_total:.1%}, gap {1-nba_total:.1%}) ═══
-{chr(10).join([f"• {m['title'].replace('Will the ','').replace(' win the 2026 NBA Finals?','')}: {m.get('yes_price',0):.1%}" for m in nba_f])}
-
-═══ NHL CUP MARKET ({len(nhl_c)} teams, total {nhl_total:.1%}, gap {1-nhl_total:.1%}) ═══
-{chr(10).join([f"• {m['title'].replace('Will the ','').replace(' win the 2026 NHL Stanley Cup?','')}: {m.get('yes_price',0):.1%}" for m in nhl_c])}
-
-═══ POLITICAL RESEARCH (30 searches) ═══
-{data.get('political', '')[:2500]}
+═══ DAILY OPPORTUNITY SCAN ═══
+{data.get('opportunities', '')[:2000]}
 
 ═══ NEWS ({len(all_news)} articles) ═══
-{data.get('news', '')[:1200]}
-
-═══ FRED ECONOMIC DATA ═══
-{data.get('fred', '')}
+{data.get('news', '')[:1000]}
 
 RESPONSE FORMAT — EXACTLY THIS:
 
+## {label} Intel — {datetime.datetime.now().strftime('%b %d, %Y')}
+
+**Macro:** [2 sentences — key macro context right now]
+
+**Energy Sector:** [2 sentences — what's moving in energy/infra today]
+
 ## Picks
 
-[If odds moved: ⚡ **ODDS ALERT**: market name moved X% — what it means]
-
-**[Market]** | YES X% | Resolves [date] ([X]d) | BUY YES/NO | H/M/L | [Why with specific data]
+**[TICKER]** | $X.XX | +X.X% | BUY/WATCH/AVOID | H/M/L | [Catalyst in one sentence]
 
 [Repeat for each pick, max 5]
 
-## Watch Next 6 Hours
+## Watch Tonight / Tomorrow
 
-- [Specific event] → affects [specific market]
-- [Specific event] → affects [specific market]"""
+- [Specific thing to watch] → affects [specific ticker]
+- [Specific thing to watch] → affects [specific ticker]"""
 
     try:
         response = client.messages.create(
@@ -792,39 +581,14 @@ RESPONSE FORMAT — EXACTLY THIS:
         )
         synthesis = response.content[0].text
         total_time = time.time() - start_time
-        print(f"\n✅ Done in {total_time:.0f}s")
+        print(f"\n✅ {report_slot.upper()} report done in {total_time:.0f}s")
 
-        save_memory(f"Research: {synthesis[:400]}", memory_type='research')
+        save_memory(f"Intel report [{report_slot}]: {synthesis[:400]}", memory_type='research')
 
-        # ONE push for the main report
         push_to_main_app(
-            f"🧠 Picks — {datetime.datetime.now().strftime('%H:%M')} ({total_time:.0f}s)",
+            f"{label} Intel — {datetime.datetime.now().strftime('%b %d, %I:%M %p')}",
             synthesis
         )
-
-        # Separate odds movements if significant
-        if movements_text:
-            push_to_main_app(
-                f"⚡ Odds Moved — {datetime.datetime.now().strftime('%H:%M')}",
-                movements_text
-            )
-
-        # NHL/NBA arb only if gap is real and >8%
-        arb_body = ""
-        if 1 - nba_total > 0.08 and len(nba_f) >= 2:
-            arb_body += f"**NBA Finals gap: {1-nba_total:.1%}**\n"
-            arb_body += "This means a team that advanced has no market — that team is free money YES\n"
-            for m in nba_f:
-                arb_body += f"• {m['title'].replace('Will the ','').replace(' win the 2026 NBA Finals?','')}: {m.get('yes_price',0):.1%}\n"
-
-        if 1 - nhl_total > 0.08 and len(nhl_c) >= 2:
-            arb_body += f"\n**NHL Cup gap: {1-nhl_total:.1%}**\n"
-            arb_body += "Missing team in market — check who advanced\n"
-            for m in nhl_c:
-                arb_body += f"• {m['title'].replace('Will the ','').replace(' win the 2026 NHL Stanley Cup?','')}: {m.get('yes_price',0):.1%}\n"
-
-        if arb_body:
-            push_to_main_app("⚡ Real Arb Gap Detected", arb_body)
 
         return synthesis
 
@@ -835,45 +599,86 @@ RESPONSE FORMAT — EXACTLY THIS:
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
+def get_la_time():
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
+
 def main():
     print("=" * 50)
     print("BINA RESEARCH WORKER ONLINE")
     print(f"Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print("  Breaking news: every 15 min")
-    print("  Sports monitor: every 30 min (4pm-1am LA)")
-    print("  Deep research: every 3 hours")
+    print("  Breaking news:       every 15 min")
+    print("  Morning report:      7:00 AM LA")
+    print("  Afternoon report:    1:00 PM LA")
+    print("  Evening report:      8:00 PM LA")
     print("=" * 50)
 
-    last_deep = 0
+    # Track which reports have fired today
+    fired_today = {
+        'morning': -1,    # day-of-year when last fired
+        'afternoon': -1,
+        'evening': -1
+    }
     last_breaking = 0
-    last_sports = 0
 
-    print("\nRunning initial deep research...")
+    # Fire a startup report immediately so the feed isn't empty on deploy
+    print("\nRunning startup intelligence report...")
     try:
-        threading.Thread(target=run_deep_research, daemon=True).start()
+        la_now = get_la_time()
+        la_hour = la_now.hour
+        if la_hour < 12:
+            slot = 'morning'
+        elif la_hour < 17:
+            slot = 'afternoon'
+        else:
+            slot = 'evening'
+        threading.Thread(
+            target=run_intelligence_report,
+            args=(slot,),
+            daemon=True
+        ).start()
     except Exception as e:
-        print(f"Initial research error: {str(e)}")
+        print(f"Startup report error: {str(e)}")
 
     while True:
         try:
             now = time.time()
-            la_time = datetime.datetime.utcnow() + datetime.timedelta(hours=-7)
+            la_time = get_la_time()
             la_hour = la_time.hour
+            la_minute = la_time.minute
+            la_day = la_time.timetuple().tm_yday
 
+            # Breaking news every 15 minutes
             if now - last_breaking > 900:
                 last_breaking = now
                 threading.Thread(
                     target=run_breaking_news_monitor, daemon=True).start()
 
-            if now - last_sports > 1800 and (la_hour >= 16 or la_hour <= 1):
-                last_sports = now
+            # Morning report — 7:00 AM LA
+            if la_hour == 7 and la_minute < 5 and fired_today['morning'] != la_day:
+                fired_today['morning'] = la_day
                 threading.Thread(
-                    target=run_sports_monitor, daemon=True).start()
+                    target=run_intelligence_report,
+                    args=('morning',),
+                    daemon=True
+                ).start()
 
-            if now - last_deep > 10800:
-                last_deep = now
+            # Afternoon report — 1:00 PM LA
+            if la_hour == 13 and la_minute < 5 and fired_today['afternoon'] != la_day:
+                fired_today['afternoon'] = la_day
                 threading.Thread(
-                    target=run_deep_research, daemon=True).start()
+                    target=run_intelligence_report,
+                    args=('afternoon',),
+                    daemon=True
+                ).start()
+
+            # Evening report — 8:00 PM LA
+            if la_hour == 20 and la_minute < 5 and fired_today['evening'] != la_day:
+                fired_today['evening'] = la_day
+                threading.Thread(
+                    target=run_intelligence_report,
+                    args=('evening',),
+                    daemon=True
+                ).start()
 
             time.sleep(60)
 
