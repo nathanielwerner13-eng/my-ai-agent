@@ -752,6 +752,10 @@ def get_memories_route():
     memories = search_memories(query, top_k=10, threshold=0.3)
     return jsonify({'memories': memories, 'count': len(memories)})
  
+@app.route('/tiktoksC77vnx8vD62sbKHdzPXaCgEE5KprxPr.txt')
+def tiktok_verify2():
+    return 'tiktoksC77vnx8vD62sbKHdzPXaCgEE5KprxPr', 200, {'Content-Type': 'text/plain'}
+
 @app.route('/tiktokvqGeSkDedicFPnJCRt89o26iAO5fmlFW.txt')
 def tiktok_verify():
     return 'tiktokvqGeSkDedicFPnJCRt89o26iAO5fmlFW', 200, {'Content-Type': 'text/plain'}
