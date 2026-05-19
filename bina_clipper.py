@@ -196,7 +196,7 @@ def get_kick_clips(streamer, limit=10):
         combined = results + results2
         # Extract kick clip URLs
         import re
-        kick_urls = re.findall(r'https?://kick\.com/[^\s'"<>]+clip[^\s'"<>]*', combined)
+        kick_urls = re.findall(r'https?://kick\.com/[^\s<>]+clip[^\s<>]*', combined)
         kick_urls = list(set(kick_urls))[:limit]
         for i, url in enumerate(kick_urls):
             clips.append({
