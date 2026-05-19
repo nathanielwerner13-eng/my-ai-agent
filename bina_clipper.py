@@ -363,6 +363,11 @@ def run_clip_farm_cycle():
         print(f"  {streamer}: {len(new_clips)} new clips")
         time.sleep(2)
 
+    print("Scanning YouTube...")
+    youtube_clips = get_all_youtube_clips()
+    for clip in youtube_clips:
+        if clip['id'] not in seen_ids:
+            all_clips.append(clip)
     print("Scanning Twitch...")
     for streamer in TWITCH_STREAMERS:
         clips = get_twitch_clips(streamer, limit=5)
