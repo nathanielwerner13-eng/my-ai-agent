@@ -752,6 +752,22 @@ def get_memories_route():
     memories = search_memories(query, top_k=10, threshold=0.3)
     return jsonify({'memories': memories, 'count': len(memories)})
 
+@app.route('/terms')
+def terms():
+    return '''<html><body style="font-family:monospace;padding:40px;background:#000;color:#fff;max-width:800px">
+    <h1>BinaClips — Terms of Service</h1>
+    <p>Last updated: May 2026</p>
+    <p>BinaClips is a content scheduling and management tool for creators. By using this service, you agree to use it in accordance with all applicable platform terms and local laws. This service is provided as-is. For questions contact nathanielwerner13@gmail.com</p>
+    </body></html>'''
+
+@app.route('/privacy')
+def privacy():
+    return '''<html><body style="font-family:monospace;padding:40px;background:#000;color:#fff;max-width:800px">
+    <h1>BinaClips — Privacy Policy</h1>
+    <p>Last updated: May 2026</p>
+    <p>BinaClips collects only the information necessary to provide scheduling and posting services. We do not sell your data. OAuth tokens are stored securely and used only to post content on your behalf. For questions contact nathanielwerner13@gmail.com</p>
+    </body></html>'''
+
 @app.route('/generate-vapid')
 def generate_vapid():
     try:
