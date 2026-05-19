@@ -421,7 +421,7 @@ def run_clip_farm_cycle():
     print("Scanning YouTube...")
     youtube_clips = get_all_youtube_clips()
     for clip in youtube_clips:
-        if clip['id'] not in seen_ids:
+        if clip['id'] not in already_seen:
             all_clips.append(clip)
     print("Scanning Twitch...")
     for streamer in TWITCH_STREAMERS:
