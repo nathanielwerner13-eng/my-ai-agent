@@ -105,14 +105,12 @@ def tiktok_callback():
     try:
         token_response = requests.post(
             'https://open.tiktokapis.com/v2/oauth/token/',
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
-            data={
-                'client_key': TIKTOK_CLIENT_KEY,
-                'client_secret': TIKTOK_CLIENT_SECRET,
-                'code': code,
-                'grant_type': 'authorization_code',
-                'redirect_uri': f'{POSTER_URL}/tiktok/callback'
-            }, timeout=15
+            headers={
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Cache-Control': 'no-cache'
+            },
+            data=f'client_key={TIKTOK_CLIENT_KEY}&client_secret={TIKTOK_CLIENT_SECRET}&code={code}&grant_type=authorization_code&redirect_uri={POSTER_URL}/tiktok/callback',
+            timeout=15
         )
         token_data = token_response.json()
         if 'access_token' not in token_data:
