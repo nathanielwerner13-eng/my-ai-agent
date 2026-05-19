@@ -157,6 +157,7 @@ def get_twitch_clips(streamer, max_clips=5):
         clips_url = f'https://api.twitch.tv/helix/clips?broadcaster_id={user_id}&first=20'
         clips_req = urllib.request.Request(clips_url, headers=headers)
         clips_res = json.loads(urllib.request.urlopen(clips_req).read())
+        print(f"Twitch {streamer} raw: {len(clips_res.get('data',[]))} clips, status keys: {list(clips_res.keys())}")
         clips = []
         for clip in clips_res.get('data', []):
             clips.append({
