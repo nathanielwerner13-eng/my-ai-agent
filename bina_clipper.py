@@ -187,6 +187,74 @@ def get_twitch_clips(streamer, limit=10):
     return clips
 
 def get_kick_clips(streamer, limit=10):
+    """Kick blocks direct API — use Serper to find clips"""
+    clips = []
+    try:
+        results = web_search(f"site:kick.com/{streamer} clip OR clips viral funny", num_results=8)
+        # Also search for recent viral moments
+        results2 = web_search(f"{streamer} kick clip viral 2026", num_results=5)
+        combined = results + results2
+        # Extract kick clip URLs
+        import re
+        kick_urls = re.findall(r'https?://kick\.com/[^\s'"<>]+clip[^\s'"<>]*', combined)
+        kick_urls = list(set(kick_urls))[:limit]
+        for i, url in enumerate(kick_urls):
+            clips.append({
+                'id': f'kick-{streamer}-{i}-{int(time.time())}',
+                'title': f'{streamer} Kick clip',
+                'url': url,
+                'views': 1000,
+                'duration': 30,
+                'streamer': streamer,
+                'platform': 'kick',
+                'thumbnail': '',
+                'likes': 0
+            })
+        if clips:
+            print(f"Kick {streamer}: {len(clips)} clips via search")
+        else:
+            print(f"Kick {streamer}: 0 clips found")
+    except Exception as e:
+        print(f"Kick error {streamer}: {str(e)}")
+    return clips
+
+def get_twitch_clips(streamer, limit=10):
+    """Use Twitch API v5 helix clips endpoint via search fallback"""
+    clips = []
+    try:
+        # Search for recent viral Twitch clips
+        results = web_search(f"{streamer} twitch clip viral funny 2026 site:clips.twitch.tv OR site:twitch.tv", num_results=8)
+        import re
+        # Match clips.twitch.tv/ClipID or twitch.tv/streamer/clip/ClipID
+        patterns = [
+            r'clips\.twitch\.tv/([a-zA-Z0-9_-]+)',
+            r'twitch\.tv/\w+/clip/([a-zA-Z0-9_-]+)',
+        ]
+        clip_ids = []
+        for pattern in patterns:
+            clip_ids.extend(re.findall(pattern, results))
+        clip_ids = list(set(clip_ids))[:limit]
+        for clip_id in clip_ids:
+            clips.append({
+                'id': clip_id,
+                'title': f'{streamer} Twitch clip - {clip_id[:12]}',
+                'url': f'https://clips.twitch.tv/{clip_id}',
+                'views': 500,
+                'duration': 30,
+                'streamer': streamer,
+                'platform': 'twitch',
+                'thumbnail': f'https://clips-media-assets2.twitch.tv/{clip_id}-preview-480x272.jpg',
+                'likes': 0
+            })
+        if clips:
+            print(f"Twitch {streamer}: {len(clips)} clips via search")
+        else:
+            print(f"Twitch {streamer}: 0 clips found")
+    except Exception as e:
+        print(f"Twitch error {streamer}: {str(e)}")
+    return clips
+
+def get_kick_clips(streamer, limit=10):
     clips = []
     # Try multiple Kick API formats
     urls_to_try = [
@@ -380,19 +448,17 @@ if __name__ == '__main__':
     main()
 
 if __name__ == '__main__':
-    def _main_loop():
-        last_scan = time.time()
+    def _clip_loop():
+        time.sleep(5)  # let Flask start first
         run_clip_farm_cycle()
         while True:
             try:
-                if time.time() - last_scan > 1800:
-                    last_scan = time.time()
-                    run_clip_farm_cycle()
-                time.sleep(60)
+                time.sleep(1800)
+                run_clip_farm_cycle()
             except Exception as e:
-                print(f"Scheduler error: {str(e)}")
+                print(f"Clip loop error: {str(e)}")
                 time.sleep(60)
-    threading.Thread(target=_main_loop, daemon=True).start()
+    threading.Thread(target=_clip_loop, daemon=True).start()
     port = int(os.environ.get('PORT', 5001))
-    print(f"Clipper Flask running on port {port}")
+    print(f"Clipper Flask starting on port {port}")
     flask_app.run(host='0.0.0.0', port=port)
