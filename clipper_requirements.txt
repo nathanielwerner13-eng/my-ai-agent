@@ -1,0 +1,7 @@
+anthropic
+requests
+flask
+flask-cors
+gunicorn
+pinecone
+openai
