@@ -86,7 +86,7 @@ def tiktok_login():
     state = f"{account_label}-{uuid.uuid4().hex[:8]}"
     params = {
         'client_key': TIKTOK_CLIENT_KEY,
-        'scope': 'user.info.basic,video.upload,video.publish',
+        'scope': 'user.info.basic,video.upload',
         'response_type': 'code',
         'redirect_uri': f'{POSTER_URL}/tiktok/callback',
         'state': state
