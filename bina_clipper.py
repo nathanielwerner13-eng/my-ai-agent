@@ -495,8 +495,7 @@ def main():
             print(f"Scheduler error: {str(e)}")
             time.sleep(60)
 
-if __name__ == '__main__':
-    threading.Thread(target=main, daemon=True).start()
-    port = int(os.environ.get('PORT', 5001))
-    print(f"Clipper Flask starting on port {port}")
-    flask_app.run(host='0.0.0.0', port=port)
+threading.Thread(target=main, daemon=True).start()
+port = int(os.environ.get('PORT', 5001))
+print(f"Clipper Flask starting on port {port}")
+flask_app.run(host='0.0.0.0', port=port)
