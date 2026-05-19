@@ -47,9 +47,10 @@ SYSTEM_PROMPT = """You are Bina (בינה), a fully autonomous AI agent and pers
 ABOUT NATHANIEL:
 - 18 years old, college student in Beverly Hills
 - Entrepreneur focused on building autonomous income systems
-- Interested in crypto, investments, Polymarket, Kalshi, sports betting, world politics
+- Interested in crypto, investments, energy infrastructure stocks, world politics
 - Watches: Bitcoin, Ethereum, Solana, Chainlink, Render
-- Interested in US politics, world politics, prediction markets, sports markets
+- Tracks: Energy stocks (XOM, CVX, NEE, CEG, KMI, COP, OXY, FSLR, VST, WMB), utilities, renewables, nuclear
+- Interested in US politics, world politics, daily investment opportunities
 - Building toward financial freedom and passive income
 - Direct, ambitious, moves fast, hates wasted time
 - Jewish background (uses Hebrew greetings occasionally)
@@ -60,8 +61,8 @@ You are Nathaniel's personal chief of staff, business partner, and autonomous ag
 YOUR CAPABILITIES:
 - Send emails: SEND_EMAIL|to@email.com|Subject|Body END_EMAIL
 - Create calendar events: CREATE_EVENT|Title|2026-05-17T10:00:00|2026-05-17T11:00:00|Description END_EVENT
-- Deep web search, persistent memory, live crypto/Polymarket/Kalshi/commodities/economic data
-- Real-time news monitoring via dedicated research worker running 24/7
+- Deep web search, persistent memory, live crypto/commodities/economic data
+- Real-time energy/stock intelligence via dedicated research worker (reports at 7am, 1pm, 8pm LA)
 
 CRITICAL MEMORY INSTRUCTIONS:
 Reference memories naturally. Never ignore relevant memories.
@@ -70,7 +71,7 @@ PERSONALITY:
 - Sharp, direct, no fluff
 - Write like a smart friend texting — not a formal report
 - Be concise unless depth is needed
-- Only recommend positions when you have verified real data and understand contract mechanics
+- Only recommend positions when you have verified real data and understand the situation
 
 The current date and time in Los Angeles will be injected into every message."""
 
@@ -273,212 +274,6 @@ def web_search(query, num_results=5):
         return f"Search error: {str(e)}"
 
 
-# ── Polymarket ────────────────────────────────────────────────────────────────
-
-def get_polymarket_markets_with_odds(limit=100):
-    try:
-        response = requests.get(
-            'https://gamma-api.polymarket.com/markets',
-            params={'limit': limit, 'active': 'true', 'closed': 'false'},
-            timeout=15
-        )
-        if response.status_code != 200:
-            return []
-
-        markets = response.json()
-        processed = []
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-
-        for m in markets:
-            title = m.get('question', m.get('title', ''))
-            volume = m.get('volume', 0) or 0
-            try:
-                volume = float(str(volume).replace(',', ''))
-            except:
-                volume = 0
-
-            yes_price = None
-            no_price = None
-            try:
-                outcome_prices = m.get('outcomePrices', '[]')
-                if isinstance(outcome_prices, str):
-                    prices = json.loads(outcome_prices)
-                elif isinstance(outcome_prices, list):
-                    prices = outcome_prices
-                else:
-                    prices = []
-                if len(prices) >= 2:
-                    yes_price = float(prices[0])
-                    no_price = float(prices[1])
-                elif len(prices) == 1:
-                    yes_price = float(prices[0])
-                    no_price = 1 - yes_price
-            except:
-                pass
-
-            end_date = m.get('endDate', m.get('end_date_iso', ''))
-            days_until = None
-            end_date_str = 'Unknown'
-            is_expired = False
-
-            if end_date:
-                try:
-                    end_dt = datetime.datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                    days_until = (end_dt - now_utc).days
-                    end_date_str = end_dt.strftime('%b %d, %Y')
-                    if days_until < 0:
-                        is_expired = True
-                except:
-                    end_date_str = str(end_date)[:10]
-
-            if is_expired:
-                continue
-
-            description = m.get('description', '')[:400] if m.get('description') else ''
-            has_floor = any(phrase in description.lower() for phrase in
-                           ['50-50', '50/50', 'neither', 'split evenly', 'resolve 0.5', '0.50'])
-            skip = bool(yes_price and (yes_price > 0.92 or yes_price < 0.08))
-
-            processed.append({
-                'title': title,
-                'volume': volume,
-                'yes_price': yes_price,
-                'no_price': no_price,
-                'end_date': end_date_str,
-                'days_until_resolution': days_until,
-                'description': description,
-                'has_floor': has_floor,
-                'skip': skip,
-                'tags': [t.get('label', '') if isinstance(t, dict) else str(t)
-                         for t in (m.get('tags') or [])],
-            })
-
-        return processed
-    except Exception as e:
-        print(f"Polymarket error: {str(e)}")
-        return []
-
-def categorize_polymarket(markets):
-    political = []
-    crypto_markets = []
-    weather = []
-    economics = []
-    sports = []
-
-    SPORTS_KEYWORDS = [
-        'nhl', 'nba', 'nfl', 'mlb', 'mls', 'ufc', 'fifa', 'world cup',
-        'stanley cup', 'super bowl', 'championship', 'playoffs', 'avalanche',
-        'spurs', 'lakers', 'celtics', 'warriors', 'heat', 'knicks', 'nuggets',
-        'patriots', 'chiefs', 'eagles', 'cowboys', 'bills', '49ers',
-        'yankees', 'dodgers', 'astros', 'braves', 'mets', 'tennis', 'golf',
-        'formula 1', 'f1', 'boxing', 'wrestling', 'wimbledon', 'us open',
-        'masters', 'olympics', 'premier league', 'la liga', 'serie a',
-        'bundesliga', 'champions league', 'nba finals', 'france win',
-        'spain win', 'england win', 'brazil win', 'argentina win', 'portugal win'
-    ]
-
-    for m in markets:
-        if m.get('skip'):
-            continue
-        title = m['title'].lower()
-        tags = [t.lower() for t in m.get('tags', [])]
-        all_text = title + ' ' + ' '.join(tags)
-
-        if any(w in all_text for w in SPORTS_KEYWORDS):
-            sports.append(m)
-        elif any(w in all_text for w in [
-                'weather', 'temperature', 'rain', 'snow', 'tornado',
-                'flood', 'storm', 'precipitation', 'drought', 'wildfire',
-                'earthquake', 'typhoon', 'blizzard']):
-            weather.append(m)
-        elif any(w in all_text for w in [
-                'bitcoin', 'btc', 'eth', 'ethereum', 'crypto', 'solana',
-                'coin', 'token', 'defi', 'nft', 'blockchain', 'airdrop']):
-            crypto_markets.append(m)
-        elif any(w in all_text for w in [
-                'fed', 'federal reserve', 'interest rate', 'gdp', 'inflation',
-                'recession', 'oil price', 'gold price', 'nasdaq', 's&p',
-                'unemployment', 'cpi', 'treasury', 'yield', 'tariff']):
-            economics.append(m)
-        elif any(w in all_text for w in [
-                'president', 'election', 'congress', 'senate', 'trump', 'biden',
-                'democrat', 'republican', 'war', 'nato', 'ukraine', 'china',
-                'iran', 'israel', 'vote', 'prime minister', 'geopolit',
-                'policy', 'government', 'minister', 'parliament', 'military',
-                'sanction', 'ceasefire', 'invasion', 'coup']):
-            political.append(m)
-
-    for lst in [political, crypto_markets, weather, economics, sports]:
-        lst.sort(key=lambda x: x['volume'], reverse=True)
-
-    return {
-        'political': political[:15],
-        'crypto': crypto_markets[:10],
-        'weather': weather[:10],
-        'economics': economics[:10],
-        'sports': sports[:10]
-    }
-
-def calculate_sports_arb(sports_markets):
-    output = ""
-    grouped = {}
-    for m in sports_markets:
-        end = m.get('end_date', 'Unknown')
-        if end not in grouped:
-            grouped[end] = []
-        grouped[end].append(m)
-    for end_date, group in grouped.items():
-        if len(group) < 3:
-            continue
-        total_yes = sum(m.get('yes_price', 0) for m in group if m.get('yes_price'))
-        days = group[0].get('days_until_resolution', 0)
-        if total_yes < 0.95 and len(group) >= 4:
-            gap = 1.0 - total_yes
-            output += f"\n🎯 ARB — {end_date} ({days}d left)\n"
-            output += f"Total YES: {total_yes:.1%} across {len(group)} outcomes (gap: {gap:.1%})\n"
-            for m in sorted(group, key=lambda x: x.get('yes_price', 0), reverse=True)[:6]:
-                output += f"  • {m['title']}: YES {m.get('yes_price', 0):.1%}\n"
-            if gap > 0.05:
-                output += f"  ⚡ Field bet has {gap:.1%} EV gap\n"
-    return output
-
-def format_markets_for_analysis(categorized):
-    output = ""
-
-    def format_category(name, markets):
-        if not markets:
-            return ""
-        result = f"\n{name.upper()} MARKETS:\n"
-        for m in markets[:8]:
-            yes = m.get('yes_price')
-            no = m.get('no_price')
-            vol = m.get('volume', 0)
-            end = m.get('end_date', 'Unknown')
-            days = m.get('days_until_resolution')
-            has_floor = m.get('has_floor', False)
-            days_str = f"{days}d left" if days is not None else "?"
-            if yes is not None:
-                result += f"• {m['title']}\n"
-                result += f"  YES: {yes:.1%} | NO: {no:.1%} | Vol: ${vol:,.0f} | Resolves: {end} ({days_str})\n"
-                if has_floor:
-                    result += f"  ⚠️ CAPITAL TRAP — resolves 50/50 if neither event happens\n"
-                if m.get('description'):
-                    result += f"  Rules: {m['description'][:100]}\n"
-            else:
-                result += f"• {m['title']} | Vol: ${vol:,.0f} | Resolves: {end} ({days_str})\n"
-        return result
-
-    output += format_category("Political", categorized['political'])
-    output += format_category("Crypto Prediction", categorized['crypto'])
-    output += format_category("Weather", categorized['weather'])
-    output += format_category("Economic", categorized['economics'])
-    output += format_category("Sports", categorized['sports'])
-    arb = calculate_sports_arb(categorized.get('sports', []))
-    if arb:
-        output += f"\nSPORTS ARB:\n{arb}"
-    return output
-
-
 # ── Crypto ────────────────────────────────────────────────────────────────────
 
 def get_crypto_data():
@@ -596,101 +391,6 @@ def get_fred_data():
         except:
             pass
     return output
-
-
-# ── Kalshi ────────────────────────────────────────────────────────────────────
-
-def get_kalshi_markets(limit=50):
-    try:
-        response = requests.get(
-            'https://api.elections.kalshi.com/trade-api/v2/markets',
-            params={'limit': limit, 'status': 'open'},
-            headers={'Accept': 'application/json'},
-            timeout=15
-        )
-        if response.status_code == 200:
-            markets = response.json().get('markets', [])
-            processed = []
-            now_utc = datetime.datetime.now(datetime.timezone.utc)
-            for m in markets:
-                close_time = m.get('close_time', '')
-                days_until = None
-                end_date_str = 'Unknown'
-                if close_time:
-                    try:
-                        end_dt = datetime.datetime.fromisoformat(close_time.replace('Z', '+00:00'))
-                        days_until = (end_dt - now_utc).days
-                        end_date_str = end_dt.strftime('%b %d, %Y')
-                        if days_until < 0:
-                            continue
-                    except:
-                        pass
-                yes_price = m.get('yes_bid', m.get('last_price', None))
-                if yes_price is not None:
-                    yes_price = yes_price / 100
-                processed.append({
-                    'title': m.get('title', ''),
-                    'yes_price': yes_price,
-                    'no_price': (1 - yes_price) if yes_price else None,
-                    'volume': m.get('volume', 0) or 0,
-                    'end_date': end_date_str,
-                    'days_until': days_until,
-                    'category': m.get('category', '')
-                })
-            return processed
-        return []
-    except Exception as e:
-        print(f"Kalshi error: {str(e)}")
-        return []
-
-def format_kalshi_markets(markets):
-    if not markets:
-        return "Kalshi unavailable."
-    output = "**Kalshi Markets**\n"
-    by_cat = {}
-    for m in markets:
-        cat = m.get('category', 'Other') or 'Other'
-        if cat not in by_cat:
-            by_cat[cat] = []
-        by_cat[cat].append(m)
-    for cat in ['Politics', 'Economics', 'Climate', 'Sports']:
-        if cat in by_cat:
-            output += f"\n{cat.upper()}:\n"
-            for m in sorted(by_cat[cat], key=lambda x: x.get('volume', 0), reverse=True)[:4]:
-                yes = m.get('yes_price')
-                days = m.get('days_until')
-                days_str = f"{days}d" if days is not None else "?"
-                if yes:
-                    output += f"• {m['title']} — YES: {yes:.1%} | {m.get('end_date', '?')} ({days_str})\n"
-    return output
-
-
-# ── Metaculus ─────────────────────────────────────────────────────────────────
-
-def get_metaculus_questions(limit=15):
-    try:
-        response = requests.get(
-            'https://www.metaculus.com/api2/questions/',
-            params={'limit': limit, 'status': 'open', 'order_by': '-activity', 'type': 'forecast'},
-            headers={'Accept': 'application/json'},
-            timeout=15
-        )
-        if response.status_code == 200:
-            questions = []
-            for q in response.json().get('results', []):
-                community = q.get('community_prediction', {})
-                prediction = community.get('full', {}).get('q2') if community else None
-                questions.append({
-                    'title': q.get('title', ''),
-                    'prediction': prediction,
-                    'resolution_date': q.get('resolution', '')[:10] if q.get('resolution') else 'Unknown',
-                    'forecasters': q.get('number_of_predictions', 0)
-                })
-            return questions
-        return []
-    except Exception as e:
-        print(f"Metaculus error: {str(e)}")
-        return []
 
 
 # ── Google Auth ───────────────────────────────────────────────────────────────
@@ -1018,7 +718,7 @@ def test_push():
 
 @app.route('/test-research')
 def test_research():
-    """Manual trigger — calls research worker directly for testing."""
+    """Manual trigger for testing."""
     try:
         response = requests.post(
             f'{BINA_URL}/internal/add-notification',
@@ -1027,7 +727,7 @@ def test_research():
                 'type': 'intelligence',
                 'subject': '🧪 Test — Research Worker Online',
                 'from': 'Bina',
-                'body': 'Research worker is running. Deep reports delivered every 2 hours automatically.',
+                'body': 'Research worker is running. Intel reports delivered at 7am, 1pm, and 8pm LA time.',
                 'timestamp': time.time()
             }
         )
@@ -1045,12 +745,6 @@ def test_email():
 @app.route('/crypto')
 def get_crypto_route():
     return jsonify({'crypto': get_crypto_data(), 'fear_greed': get_fear_greed_index()})
-
-@app.route('/polymarket')
-def get_polymarket_route():
-    markets = get_polymarket_markets_with_odds(limit=50)
-    categorized = categorize_polymarket(markets)
-    return jsonify({'count': len(markets), 'formatted': format_markets_for_analysis(categorized)})
 
 @app.route('/memories', methods=['GET'])
 def get_memories_route():
@@ -1089,30 +783,27 @@ def chat():
     memory_context = format_memories(all_memories)
     msg_lower = user_message.lower()
 
+    # Crypto trigger
     if any(word in msg_lower for word in ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 'solana', 'sol', 'price', 'coin']):
         crypto_data = get_crypto_data()
         fear_greed = get_fear_greed_index()
         user_message_with_context += f"\n\nLive crypto:\n{format_crypto_report(crypto_data, fear_greed)}"
 
-    if any(word in msg_lower for word in ['polymarket', 'prediction market', 'odds', 'bet']):
-        markets = get_polymarket_markets_with_odds(limit=50)
-        categorized = categorize_polymarket(markets)
-        user_message_with_context += f"\n\nLive Polymarket:\n{format_markets_for_analysis(categorized)}"
-
-    if any(word in msg_lower for word in ['kalshi']):
-        kalshi = get_kalshi_markets(limit=30)
-        user_message_with_context += f"\n\nLive Kalshi:\n{format_kalshi_markets(kalshi)}"
-
+    # Commodities trigger
     if any(word in msg_lower for word in ['gold', 'oil', 'commodity', 'commodities']):
         user_message_with_context += f"\n\nCommodities:\n{get_real_commodity_prices()}"
 
+    # FRED trigger
     if any(word in msg_lower for word in ['fed', 'federal reserve', 'inflation', 'unemployment', 'economic data']):
         user_message_with_context += f"\n\nFRED Economic Data:\n{get_fred_data()}"
 
+    # Search triggers
     search_triggers = ['search', 'look up', 'find', 'what is', 'who is', 'latest', 'news',
                        'current', 'stock', 'weather', 'research', 'tell me about', 'what happened',
                        'today', 'trending', 'recent', 'update', 'best', 'top', 'political', 'politics',
-                       'gold', 'oil', 'commodity', 'strait', 'war', 'attack', 'breaking']
+                       'gold', 'oil', 'commodity', 'strait', 'war', 'attack', 'breaking',
+                       'energy', 'xom', 'cvx', 'nee', 'ceg', 'kmi', 'cop', 'oxy', 'fslr', 'vst',
+                       'solar', 'nuclear', 'pipeline', 'utility', 'renewable']
     deep_triggers = ['research', 'deep dive', 'everything about', 'full report', 'analyze',
                      'investigate', 'background on', 'tell me about']
 
@@ -1121,6 +812,7 @@ def chat():
     elif any(word in msg_lower for word in search_triggers):
         user_message_with_context += f"\n\nSearch:\n{web_search(user_message)}"
 
+    # Calendar trigger
     if any(word in msg_lower for word in ['schedule', 'calendar', 'meeting', 'tomorrow', 'what do i have']):
         events = get_upcoming_events(max_results=5)
         if events:
