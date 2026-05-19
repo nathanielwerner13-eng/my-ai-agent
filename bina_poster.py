@@ -32,7 +32,7 @@ POSTING_SCHEDULE = [
     {'hour': 23, 'minute': 0},
 ]
 
-print("Bina Poster starting...")
+print("Bina Poster starting v2...")
 
 def load_accounts():
     try:
