@@ -154,7 +154,7 @@ def get_twitch_clips(streamer, max_clips=5):
         user_id = user_res['data'][0]['id']
         from datetime import datetime, timezone, timedelta
         started_at = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
-        clips_url = f'https://api.twitch.tv/helix/clips?broadcaster_id={user_id}&first=20&started_at={started_at}'
+        clips_url = f'https://api.twitch.tv/helix/clips?broadcaster_id={user_id}&first=20'
         clips_req = urllib.request.Request(clips_url, headers=headers)
         clips_res = json.loads(urllib.request.urlopen(clips_req).read())
         clips = []
