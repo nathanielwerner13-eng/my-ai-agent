@@ -8,8 +8,28 @@ import urllib.request
 import uuid
 import re
 from anthropic import Anthropic
+from flask import Flask, jsonify
 
+flask_app = Flask(__name__)
 client = Anthropic()
+
+def get_la_time():
+    try:
+        import zoneinfo
+        return datetime.datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles")).replace(tzinfo=None)
+    except:
+        utc = datetime.datetime.utcnow()
+        offset = -7 if 4 <= utc.month <= 10 else -8
+        return utc + datetime.timedelta(hours=offset)
+
+@flask_app.route('/test-clip-cycle')
+def test_clip_cycle():
+    threading.Thread(target=run_clip_farm_cycle, daemon=True).start()
+    return jsonify({"status": "triggered", "la_time": get_la_time().strftime('%H:%M:%S'), "message": "Check Clips tab in ~60 seconds"})
+
+@flask_app.route('/health')
+def health():
+    return jsonify({"status": "ok", "service": "bina-clipper", "la_time": get_la_time().strftime('%Y-%m-%d %H:%M:%S')})
 
 BINA_URL = os.environ.get('BINA_URL', 'https://my-ai-agent-production-5e17.up.railway.app')
 SERPER_API_KEY = os.environ.get('SERPER_API_KEY', '')
@@ -360,23 +380,19 @@ if __name__ == '__main__':
     main()
 
 if __name__ == '__main__':
-    import threading
     def _main_loop():
-        global last_scan
-        last_scan = 0
         last_scan = time.time()
         run_clip_farm_cycle()
         while True:
             try:
-                now = time.time()
-                if now - last_scan > 1800:
-                    last_scan = now
+                if time.time() - last_scan > 1800:
+                    last_scan = time.time()
                     run_clip_farm_cycle()
                 time.sleep(60)
             except Exception as e:
                 print(f"Scheduler error: {str(e)}")
                 time.sleep(60)
-    t = threading.Thread(target=_main_loop, daemon=True)
-    t.start()
+    threading.Thread(target=_main_loop, daemon=True).start()
     port = int(os.environ.get('PORT', 5001))
+    print(f"Clipper Flask running on port {port}")
     flask_app.run(host='0.0.0.0', port=port)
